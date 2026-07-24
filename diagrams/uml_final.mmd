@@ -1,0 +1,101 @@
+classDiagram
+    class Utils {
+        <<utility>>
+        +format_time(t: Time) String
+        +format_duration(totalMinutes: int) String
+    }
+
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+    }
+
+    class Pet {
+        +String name
+        +String species
+        +String breed
+        +int age
+        +String foodType
+        +String medication
+        +int energyLevel
+        +List~String~ careNeeds
+        +List~Task~ tasks
+        +String petId
+        +addCareNeed(need: String) void
+        +updatePet(field: String, value: Any) void
+        +to_dict() Map
+        +from_dict(data: Map) Pet
+        +__eq__(other: Any) bool
+        +__hash__() int
+        +getPetSummary() String
+    }
+
+    class Owner {
+        +String name
+        +Time startTime
+        +Time endTime
+        +Map~String, String~ preferences
+        +List~Pet~ pets
+        +Scheduler scheduler
+        +availableMinutes() int
+        +addPet(pet: Pet) void
+        +removePet(pet: Pet) void
+        +updatePreferences(prefs: Map) void
+        +getAvailableTime() int
+        +save_to_json(filepath: String) void
+        +load_from_json(filepath: String) Owner
+    }
+
+    class Task {
+        +String taskName
+        +String taskType
+        +int durationMinutes
+        +Priority priority
+        +Pet pet
+        +Time preferredTime
+        +String recurrence
+        +Date dueDate
+        +boolean completed
+        +String notes
+        +String taskId
+        +markComplete() void
+        +updateTask(field: String, value: Any) void
+        +to_dict() Map
+        +from_dict(data: Map, pet: Pet) Task
+        +__eq__(other: Any) bool
+        +__hash__() int
+        -_spawn_next() Task
+        +getTaskSummary() String
+    }
+
+    class Scheduler {
+        +List~Task~ tasks
+        +int timeAvailable
+        +Time startTime
+        +List~Task~ dailyPlan
+        +List~Task~ unscheduledTasks
+        +String ownerName
+        +bool planGenerated
+        +addTask(task: Task) void
+        +editTask(task: Task) void
+        +removeTask(task: Task) void
+        +generatePlan() List~Task~
+        -_fits_window(task: Task, today_dt: datetime, window_end: Time) bool
+        +sortTasksByPriority() List~Task~
+        +sort_by_time(tasks: List~Task~) List~Task~
+        +filterTasks(completed: bool, petName: String) List~Task~
+        +completeTask(task: Task) Task
+        +detectConflicts() List~Task~
+        +getConflictWarnings() List~String~
+        +explainPlan() String
+    }
+
+    Owner "1" --> "0..*" Pet : owns
+    Owner "1" *-- "1" Scheduler : owns (created in __init__)
+    Scheduler "1" --> "0..*" Task : manages
+    Task "1" --> "1" Pet : assignedTo
+    Pet "1" --> "0..*" Task : has (synced by Scheduler.addTask/editTask)
+    Task ..> Priority : uses
+    Task "1" --> "0..1" Task : spawns next occurrence
