@@ -1,6 +1,6 @@
 import datetime
 import streamlit as st
-from pawpal_system import Pet, Priority, Task, Owner, format_time, format_duration
+from pawpal_system import Pet, Priority, Task, Owner, Flexibility, format_time, format_duration
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 st.title("🐾 PawPal+")
@@ -29,10 +29,19 @@ def priority_badge(priority: Priority) -> str:
     return {"high": "🔴 High", "medium": "🟠 Medium", "low": "🟢 Low"}.get(priority.value, priority.value)
 
 
+def flexibility_badge(flexibility: Flexibility) -> str:
+    return {
+        "fixed": "🔒 Fixed",
+        "preferred": "🕓 Preferred",
+        "flexible": "↔️ Flexible",
+    }.get(flexibility.value, flexibility.value)
+
+
 def task_detail_line(t: Task) -> str:
     line = (
         f"{format_time(t.preferredTime)} — {t.taskName} "
-        f"({format_duration(t.durationMinutes)}) · {priority_badge(t.priority)} · Due: {t.dueDate}"
+        f"({format_duration(t.durationMinutes)}) · {priority_badge(t.priority)} · "
+        f"{flexibility_badge(t.flexibility)} · Due: {t.dueDate}"
     )
     if t.recurrence != "none":
         line += f" · Recurs: {t.recurrence.capitalize()}"
@@ -76,6 +85,7 @@ def render_task_card(t: Task, owner: "Owner", key_prefix: str) -> None:
             default_recur_index = (
                 lower_options.index(t.recurrence) if t.recurrence in lower_options else 0
             )
+            flexibility_options = ["Fixed", "Preferred", "Flexible"]
             with st.form(key=f"edit_task_form_{key_prefix}_{t.taskId}"):
                 ecol1, ecol2 = st.columns(2)
                 with ecol1:
@@ -99,6 +109,13 @@ def render_task_card(t: Task, owner: "Owner", key_prefix: str) -> None:
                         index=["high", "medium", "low"].index(t.priority.value),
                         key=f"edit_tprio_{key_prefix}_{t.taskId}",
                     )
+                    edit_flexibility = st.selectbox(
+                        "Flexibility", flexibility_options,
+                        index=["fixed", "preferred", "flexible"].index(t.flexibility.value),
+                        key=f"edit_tflex_{key_prefix}_{t.taskId}",
+                        help="Fixed: must not move. Preferred: may move slightly with approval. "
+                             "Flexible: may move within availability with approval.",
+                    )
                     edit_pref_time = time_picker(
                         "Preferred time", t.preferredTime, f"edit_ttime_{key_prefix}_{t.taskId}"
                     )
@@ -116,6 +133,7 @@ def render_task_card(t: Task, owner: "Owner", key_prefix: str) -> None:
                     priority=Priority(edit_priority),
                     pet=t.pet,
                     preferredTime=edit_pref_time,
+                    flexibility=Flexibility(edit_flexibility.lower()),
                     recurrence=edit_recurrence.lower(),
                     dueDate=edit_due_date,
                     completed=t.completed,
@@ -160,9 +178,10 @@ if st.button("Create / Update Owner"):
         o.scheduler.ownerName = owner_name
     st.session_state.owner.save_to_json(DATA_FILE)
     st.success(
-        f"Owner '{owner_name}' saved — "
-        f"{format_duration(st.session_state.owner.getAvailableTime())} available "
-        f"({format_time(start_time)} to {format_time(end_time)})."
+        f"Owner saved successfully: {owner_name}\n\n"
+        f"Availability: {format_time(start_time)} to {format_time(end_time)}\n\n"
+        f"Total available time: "
+        f"{format_duration(st.session_state.owner.getAvailableTime())}"
     )
 
 if "owner" in st.session_state:
@@ -276,6 +295,11 @@ with st.form("add_task_form"):
         recurrence   = st.selectbox("Recurrence", ["None", "Daily", "Weekly"])
     with col2:
         priority_str = st.selectbox("Priority", ["high", "medium", "low"])
+        flexibility_str = st.selectbox(
+            "Flexibility", ["Fixed", "Preferred", "Flexible"], index=2,
+            help="Fixed: must not move. Preferred: may move slightly with approval. "
+                 "Flexible: may move within availability with approval.",
+        )
         selected_pet = st.selectbox(
             "For which pet?",
             options=owner.pets,
@@ -293,6 +317,7 @@ if task_submitted:
         priority=Priority(priority_str),
         pet=selected_pet,
         preferredTime=pref_time,
+        flexibility=Flexibility(flexibility_str.lower()),
         recurrence=recurrence.lower(),
         dueDate=due_date,
     )

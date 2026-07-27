@@ -1,0 +1,38 @@
+flowchart TD
+    A[Owner enters pets, tasks, and availability]
+    N[Evaluation Harness]
+    B[PawPal Scheduler generates draft plan]
+    C[Conflict Detector checks overlapping tasks]
+    D[Care Rule Retriever searches custom instructions]
+    E[AI Plan Critic analyzes draft plan]
+    F[AI Repair Agent proposes task changes]
+    G[Deterministic Schedule Validator]
+    M[Save structured agent log]
+    H{Proposal valid?}
+    J[Human approval]
+    K[Apply approved changes]
+    L[Display final schedule]
+
+    A --> B
+    B --> C
+    C --> E
+    D --> E
+    E --> F
+    F --> G
+    G --> H
+    H -- No, first failure --> F
+    H -- No, final failure --> J
+    H -- Yes --> J
+    J -- Approve --> K
+    J -- Reject --> L
+    K --> L
+
+    E --> M
+    F --> M
+    G --> M
+    J --> M
+
+    N --> B
+    N --> D
+    N --> E
+    N --> G
