@@ -167,6 +167,67 @@ class TestBuildSnapshotDoesNotMutate(unittest.TestCase):
         self.assertIs(owner.scheduler.tasks[0], task)
 
 
+class TestCompletedTasksAreExcluded(unittest.TestCase):
+    def test_completed_task_excluded_from_snapshot(self):
+        owner = make_owner()
+        pet = make_pet()
+        owner.addPet(pet)
+        pending = make_task(pet, name="Pending Walk")
+        done = make_task(pet, name="Done Walk", preferred_time=Time(9, 0))
+        done.markComplete()
+        owner.scheduler.addTask(pending)
+        owner.scheduler.addTask(done)
+
+        snapshot = build_schedule_snapshot(owner)
+
+        task_ids = {t.task_id for t in snapshot.tasks}
+        self.assertIn(pending.taskId, task_ids)
+        self.assertNotIn(done.taskId, task_ids)
+
+    def test_owner_with_only_completed_tasks_builds_empty_snapshot(self):
+        owner = make_owner()
+        pet = make_pet()
+        owner.addPet(pet)
+        done = make_task(pet, name="Done Walk")
+        done.markComplete()
+        owner.scheduler.addTask(done)
+
+        snapshot = build_schedule_snapshot(owner)
+
+        self.assertEqual(snapshot.tasks, ())
+
+    def test_completing_recurring_task_snapshot_includes_only_spawned_occurrence(self):
+        owner = make_owner()
+        pet = make_pet()
+        owner.addPet(pet)
+        task = make_task(pet, name="Daily Walk")
+        task.recurrence = "daily"
+        owner.scheduler.addTask(task)
+
+        next_task = owner.scheduler.completeTask(task)
+
+        snapshot = build_schedule_snapshot(owner)
+
+        task_ids = {t.task_id for t in snapshot.tasks}
+        self.assertIsNotNone(next_task)
+        self.assertIn(next_task.taskId, task_ids)
+        self.assertNotIn(task.taskId, task_ids)
+
+    def test_marking_task_completed_changes_snapshot_version(self):
+        owner = make_owner() 
+        pet = make_pet()
+        owner.addPet(pet)
+        task = make_task(pet, name="Walk")
+        owner.scheduler.addTask(task)
+        before = build_schedule_snapshot(owner)
+
+        task.markComplete()
+        after = build_schedule_snapshot(owner)
+
+        self.assertNotEqual(before.version, after.version)
+        self.assertEqual(after.tasks, ())
+
+
 class TestEmptySchedule(unittest.TestCase):
     def test_owner_with_no_tasks_builds_valid_empty_snapshot(self):
         owner = make_owner()

@@ -189,7 +189,7 @@ class Task:
     priority: Priority
     pet: Pet
     preferredTime: Time          # datetime.time replaces the bare "HH:MM" string
-    flexibility: Flexibility = Flexibility.FLEXIBLE
+    flexibility: Optional[Flexibility] = None  # resolved in __post_init__; None means "use the type-based default"
     recurrence: str = "none"     # "none" | "daily" | "weekly"
     dueDate: Date = dc_field(default_factory=lambda: datetime.today().date())
     completed: bool = False

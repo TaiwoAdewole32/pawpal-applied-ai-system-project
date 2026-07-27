@@ -95,10 +95,15 @@ def build_schedule_snapshot(owner: "Owner") -> ScheduleSnapshot:
     Never mutates the live Owner/Pet/Task graph. Deliberately excludes task
     notes and pet medical/food fields (see PAWPAL_SENTINEL_IMPLEMENTATION_PLAN.md
     Phase 2.7) so there is nothing sensitive in a snapshot for a later AI
-    prompt to accidentally include.
+    prompt to accidentally include. Completed tasks are also excluded — they
+    are historical, Sentinel has nothing to review or repair about them, and
+    excluding them means a proposal can never reference a completed task's ID.
     """
     task_snapshots = tuple(
-        sorted((_task_to_snapshot(t) for t in owner.scheduler.tasks), key=lambda t: t.task_id)
+        sorted(
+            (_task_to_snapshot(t) for t in owner.scheduler.tasks if not t.completed),
+            key=lambda t: t.task_id,
+        )
     )
     unscheduled_ids = tuple(
         sorted(t.taskId for t in owner.scheduler.unscheduledTasks)
