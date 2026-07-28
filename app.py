@@ -1,11 +1,23 @@
 import datetime
 import streamlit as st
+from dotenv import load_dotenv
 from pawpal_system import Pet, Priority, Task, Owner, Flexibility, format_time, format_duration
+from ai_client import AIConfigError, GeminiAIClient
+
+load_dotenv()
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 st.title("🐾 PawPal+")
 
 DATA_FILE = "data.json"
+
+if "ai_client" not in st.session_state:
+    try:
+        st.session_state.ai_client = GeminiAIClient()
+        st.session_state.ai_status = "ready"
+    except AIConfigError as exc:
+        st.session_state.ai_client = None
+        st.session_state.ai_status = str(exc)
 
 
 def time_picker(label: str, default: datetime.time, key_prefix: str) -> datetime.time:
@@ -400,3 +412,16 @@ else:
                 st.error(warning)
         else:
             st.success("No scheduling conflicts detected.")
+
+# ── Section 5: AI Review ─────────────────────────────────────────────────────
+st.divider()
+st.subheader("AI Review")
+
+if st.session_state.ai_client is None:
+    st.info(
+        "AI review is not configured. Copy `.env.example` to `.env`, set "
+        "`GEMINI_API_KEY`, and restart the app to enable it."
+    )
+    st.button("Review Schedule with AI", disabled=True)
+else:
+    st.button("Review Schedule with AI", disabled=True, help="Coming soon.")
