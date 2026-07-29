@@ -8,10 +8,16 @@ care rules. Its output must pass CriticResult's strict schema validation.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ai_client import AIClient, AIConfigError
+from ai_client import (
+    AIClient,
+    AIConfigError,
+    AIResponseParseError,
+    parse_model_json_object,
+)
 from sentinel_models import (
     AIResponseValidationError,
     CriticResult,
@@ -21,6 +27,7 @@ from sentinel_models import (
 
 CRITIC_PROMPT_VERSION = "pawpal-critic-v1"
 MAX_RULE_CONTENT_CHARS = 1_000
+MAX_RETRIEVED_RULES = 3
 
 PLAN_CRITIC_SYSTEM_PROMPT = """You are PawPal Sentinel's schedule critic.
 
@@ -178,6 +185,11 @@ def _normalize_rules(retrieved_rules: object) -> list[dict[str, object]]:
     ):
         raise PlanCriticInputError("retrieved_rules must be a sequence.")
 
+    if len(retrieved_rules) > MAX_RETRIEVED_RULES:
+        raise PlanCriticInputError(
+            f"retrieved_rules may contain at most {MAX_RETRIEVED_RULES} sections."
+        )
+
     normalized: list[dict[str, object]] = []
     seen_sections: set[str] = set()
     for index, rule in enumerate(retrieved_rules):
@@ -198,9 +210,14 @@ def _normalize_rules(retrieved_rules: object) -> list[dict[str, object]]:
             raise PlanCriticInputError(
                 f"retrieved_rules[{index}].content must be a non-empty string."
             )
-        if isinstance(score, bool) or not isinstance(score, (int, float)):
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+            or float(score) < 0
+        ):
             raise PlanCriticInputError(
-                f"retrieved_rules[{index}].score must be numeric."
+                f"retrieved_rules[{index}].score must be a finite non-negative number."
             )
 
         section = section.strip()
@@ -270,16 +287,19 @@ class PlanCritic:
             )
         except AIConfigError:
             raise
+        except AIResponseParseError as exc:
+            raise PlanCriticError(f"Invalid critic output: {exc}") from None
         except Exception as exc:
             raise PlanCriticError(
                 f"Plan critic request failed ({type(exc).__name__})."
             ) from None
 
         try:
+            parsed_response = parse_model_json_object(raw_response)
             return CriticResult.from_dict(
-                raw_response,
+                parsed_response,
                 known_task_ids=known_task_ids,
                 known_rule_sections={rule["section"] for rule in normalized_rules},
             )
-        except AIResponseValidationError as exc:
+        except (AIResponseParseError, AIResponseValidationError) as exc:
             raise PlanCriticError(f"Invalid critic output: {exc}") from None

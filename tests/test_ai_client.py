@@ -38,7 +38,7 @@ class TestGeminiAIClientConfig(unittest.TestCase):
 
     def test_explicit_api_key_constructs_without_error(self):
         with patch.dict(os.environ, {}, clear=True):
-            with patch("ai_client.genai.Client") as mock_client:
+            with patch("google.genai.Client") as mock_client:
                 client = GeminiAIClient(api_key="fake-key-123")
 
         self.assertEqual(client.model_name, DEFAULT_MODEL_NAME)
@@ -46,7 +46,7 @@ class TestGeminiAIClientConfig(unittest.TestCase):
 
     def test_env_api_key_constructs_without_error(self):
         with patch.dict(os.environ, {"GEMINI_API_KEY": "fake-key-456"}, clear=True):
-            with patch("ai_client.genai.Client"):
+            with patch("google.genai.Client"):
                 GeminiAIClient()  # must not raise
 
 
@@ -61,7 +61,7 @@ class TestSecretRedaction(unittest.TestCase):
 
     def test_generate_json_error_does_not_leak_key(self):
         with patch.dict(os.environ, {}, clear=True):
-            with patch("ai_client.genai.Client") as mock_client_cls:
+            with patch("google.genai.Client") as mock_client_cls:
                 mock_client = mock_client_cls.return_value
                 mock_client.models.generate_content.side_effect = RuntimeError(
                     "auth header leaked: fake-key-789"
@@ -76,11 +76,22 @@ class TestSecretRedaction(unittest.TestCase):
 
 class TestImportSafety(unittest.TestCase):
     def test_import_does_not_require_api_key(self):
-        with patch.dict(os.environ, {}, clear=True):
-            import importlib
-            import ai_client as ai_client_module
+        # Load a throwaway copy of the module (rather than
+        # importlib.reload(ai_client), which mutates sys.modules["ai_client"]
+        # in place and would replace classes like AIResponseParseError with
+        # new objects of the same name -- silently breaking isinstance/
+        # pytest.raises checks in every other test module that already
+        # imported the original classes).
+        import importlib.util
 
-            importlib.reload(ai_client_module)  # must not raise
+        import ai_client
+
+        with patch.dict(os.environ, {}, clear=True):
+            spec = importlib.util.spec_from_file_location(
+                "ai_client_import_safety_check", ai_client.__file__
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)  # must not raise
 
 
 if __name__ == "__main__":

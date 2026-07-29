@@ -9,6 +9,7 @@ before application logic can use it.
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Optional
@@ -99,6 +100,8 @@ MAX_RULE_SECTIONS_PER_ISSUE = 3
 MAX_SUMMARY_LENGTH = 1_000
 MAX_EXPLANATION_LENGTH = 1_000
 MAX_REASON_LENGTH = 500
+MAX_REPAIR_CHANGES = 50
+MAX_TIME_TEXT_LENGTH = 20
 
 _CRITIC_TOP_LEVEL_FIELDS = frozenset({"status", "summary", "issues", "confidence"})
 _CRITIC_ISSUE_FIELDS = frozenset(
@@ -370,9 +373,9 @@ class CriticResult:
                 f"got {_type_name(confidence_raw)}."
             )
         confidence = float(confidence_raw)
-        if not 0.0 <= confidence <= 1.0:
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
             raise AIResponseValidationError(
-                "critic response.confidence must be between 0 and 1."
+                "critic response.confidence must be a finite number between 0 and 1."
             )
 
         if status is CriticStatus.NEEDS_REVISION and not issues:
@@ -431,10 +434,11 @@ class RepairResult:
                 "repair response.proposed_changes must be a list, "
                 f"got {_type_name(raw_changes)}."
             )
-        if len(raw_changes) > max_changes:
+        effective_max_changes = min(max_changes, MAX_REPAIR_CHANGES)
+        if len(raw_changes) > effective_max_changes:
             raise AIResponseValidationError(
-                f"repair response proposes {len(raw_changes)} changes for only "
-                f"{max_changes} reviewed task(s)."
+                f"repair response proposes {len(raw_changes)} changes; maximum is "
+                f"{effective_max_changes} for this reviewed schedule."
             )
 
         changes: list[ProposedChange] = []
@@ -456,17 +460,36 @@ class RepairResult:
             )
 
             original_time = change["original_time"]
-            if original_time is not None and not isinstance(original_time, str):
-                raise AIResponseValidationError(
-                    f"{label}.original_time must be a string or null, "
-                    f"got {_type_name(original_time)}."
-                )
+            if original_time is not None:
+                if not isinstance(original_time, str):
+                    raise AIResponseValidationError(
+                        f"{label}.original_time must be a string or null, "
+                        f"got {_type_name(original_time)}."
+                    )
+                if not original_time or original_time != original_time.strip():
+                    raise AIResponseValidationError(
+                        f"{label}.original_time must be a non-empty value without surrounding whitespace."
+                    )
+                if len(original_time) > MAX_TIME_TEXT_LENGTH:
+                    raise AIResponseValidationError(
+                        f"{label}.original_time exceeds {MAX_TIME_TEXT_LENGTH} characters."
+                    )
+
             new_time = change["new_time"]
-            if new_time is not None and not isinstance(new_time, str):
-                raise AIResponseValidationError(
-                    f"{label}.new_time must be a string or null, "
-                    f"got {_type_name(new_time)}."
-                )
+            if new_time is not None:
+                if not isinstance(new_time, str):
+                    raise AIResponseValidationError(
+                        f"{label}.new_time must be a string or null, "
+                        f"got {_type_name(new_time)}."
+                    )
+                if not new_time or new_time != new_time.strip():
+                    raise AIResponseValidationError(
+                        f"{label}.new_time must be a non-empty value without surrounding whitespace."
+                    )
+                if len(new_time) > MAX_TIME_TEXT_LENGTH:
+                    raise AIResponseValidationError(
+                        f"{label}.new_time exceeds {MAX_TIME_TEXT_LENGTH} characters."
+                    )
 
             changes.append(
                 ProposedChange(
@@ -609,4 +632,3 @@ def build_schedule_snapshot(owner: "Owner") -> ScheduleSnapshot:
             availability_start, availability_end, task_snapshots
         ),
     )
-

@@ -8,10 +8,16 @@ trust boundary.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ai_client import AIClient, AIConfigError
+from ai_client import (
+    AIClient,
+    AIConfigError,
+    AIResponseParseError,
+    parse_model_json_object,
+)
 from sentinel_models import (
     AIResponseValidationError,
     CriticResult,
@@ -21,8 +27,9 @@ from sentinel_models import (
     schedule_snapshot_to_dict,
 )
 
-REPAIR_PROMPT_VERSION = "pawpal-repair-v1"
+REPAIR_PROMPT_VERSION = "pawpal-repair-v2-few-shot"
 MAX_RULE_CONTENT_CHARS = 1_000
+MAX_RETRIEVED_RULES = 3
 
 REPAIR_AGENT_SYSTEM_PROMPT = """You are PawPal Sentinel's specialized schedule repair agent.
 
@@ -63,6 +70,24 @@ Hard constraints:
   ],
   "summary": "short summary"
 }
+
+Compact PawPal examples:
+
+Example 1 - fixed medication overlaps a flexible walk.
+Facts: med-1 is a fixed medication at 08:00. walk-1 is a flexible walk at
+08:00. Moving walk-1 to 09:00 is inside availability and conflict-free.
+Output:
+{"proposed_changes":[{"task_id":"walk-1","action":"move","original_time":"08:00","new_time":"09:00","reason":"Move the flexible walk and keep the fixed medication unchanged."}],"summary":"Move the flexible walk only."}
+
+Example 2 - two fixed tasks overlap.
+Facts: vet-1 and med-1 are both fixed and overlap. Neither may move.
+Output:
+{"proposed_changes":[{"task_id":"vet-1","action":"defer_for_review","original_time":"10:00","new_time":null,"reason":"The fixed-task conflict requires owner review."},{"task_id":"med-1","action":"defer_for_review","original_time":"10:00","new_time":null,"reason":"The fixed-task conflict requires owner review."}],"summary":"Do not move either fixed task; defer the conflict for human review."}
+
+Example 3 - conflict-free schedule.
+Facts: the critic reports no supported issue.
+Output:
+{"proposed_changes":[],"summary":"No changes are needed."}
 """
 
 
@@ -81,6 +106,11 @@ def _normalize_rules(retrieved_rules: object) -> list[dict[str, object]]:
         retrieved_rules, (str, bytes)
     ):
         raise RepairAgentInputError("retrieved_rules must be a sequence.")
+
+    if len(retrieved_rules) > MAX_RETRIEVED_RULES:
+        raise RepairAgentInputError(
+            f"retrieved_rules may contain at most {MAX_RETRIEVED_RULES} sections."
+        )
 
     normalized: list[dict[str, object]] = []
     seen_sections: set[str] = set()
@@ -102,9 +132,14 @@ def _normalize_rules(retrieved_rules: object) -> list[dict[str, object]]:
             raise RepairAgentInputError(
                 f"retrieved_rules[{index}].content must be a non-empty string."
             )
-        if isinstance(score, bool) or not isinstance(score, (int, float)):
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+            or float(score) < 0
+        ):
             raise RepairAgentInputError(
-                f"retrieved_rules[{index}].score must be numeric."
+                f"retrieved_rules[{index}].score must be a finite non-negative number."
             )
 
         section = section.strip()
@@ -185,22 +220,25 @@ class RepairAgent:
             )
         except AIConfigError:
             raise
+        except AIResponseParseError as exc:
+            raise RepairAgentError(f"Invalid repair output: {exc}") from None
         except Exception as exc:
             raise RepairAgentError(
                 f"Repair agent request failed ({type(exc).__name__})."
             ) from None
 
         try:
+            parsed_response = parse_model_json_object(raw_response)
             result = RepairResult.from_dict(
-                raw_response,
+                parsed_response,
                 max_changes=len(snapshot.tasks),
             )
-        except AIResponseValidationError as exc:
+        except (AIResponseParseError, AIResponseValidationError) as exc:
             raise RepairAgentError(f"Invalid repair output: {exc}") from None
 
-        # Enforce the agent's scope deterministically. Safety properties such
-        # as action allowlists, protected-task rules, time formats, availability,
-        # and conflicts still belong to ScheduleValidator.
+        # Enforce the agent's issue scope deterministically. The separate
+        # ScheduleValidator remains responsible for action allowlists, protected
+        # tasks, time syntax, availability, and candidate-plan conflicts.
         out_of_scope = sorted(
             {
                 change.task_id
