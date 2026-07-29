@@ -172,6 +172,45 @@ def _validate_critic_scope(
     return issue_task_ids
 
 
+MAX_VALIDATOR_ERRORS = 30
+MAX_VALIDATOR_ERROR_CHARS = 500
+
+REPAIR_REVISION_SYSTEM_PROMPT = REPAIR_AGENT_SYSTEM_PROMPT + """
+
+Revision-specific rules:
+- This is the single allowed correction attempt.
+- Use the original schedule, critic result, care rules, rejected proposal, and
+  validator errors supplied by the application.
+- Correct only the listed validator failures.
+- Do not repeat a rejected value unless the validator error clearly shows that
+  the value was not the cause.
+- Do not add commentary outside the required JSON object.
+"""
+
+
+def _normalize_validator_errors(errors: object) -> list[str]:
+    """Return a small, safe list of validator messages for one revision call."""
+    if not isinstance(errors, Sequence) or isinstance(errors, (str, bytes)):
+        raise RepairAgentInputError("validator_errors must be a sequence of strings.")
+    if not errors:
+        raise RepairAgentInputError(
+            "validator_errors must contain at least one error for a revision."
+        )
+    if len(errors) > MAX_VALIDATOR_ERRORS:
+        raise RepairAgentInputError(
+            f"validator_errors may contain at most {MAX_VALIDATOR_ERRORS} items."
+        )
+
+    normalized: list[str] = []
+    for index, error in enumerate(errors):
+        if not isinstance(error, str) or not error.strip():
+            raise RepairAgentInputError(
+                f"validator_errors[{index}] must be a non-empty string."
+            )
+        normalized.append(error.strip()[:MAX_VALIDATOR_ERROR_CHARS])
+    return normalized
+
+
 class RepairAgent:
     """Calls an AIClient and returns a strictly parsed, unapplied RepairResult."""
 
@@ -180,14 +219,15 @@ class RepairAgent:
             raise TypeError("ai_client must provide generate_json(system_prompt, user_payload).")
         self.ai_client = ai_client
 
-    def propose(
+    def _request_repair(
         self,
         snapshot: ScheduleSnapshot,
         critic_result: CriticResult,
         *,
-        retrieved_rules: object = (),
+        retrieved_rules: object,
+        revision_context: dict[str, object] | None = None,
     ) -> RepairResult:
-        """Propose a structured repair; never validate or apply it."""
+        """Run one initial or revision request through the same strict boundary."""
         if not isinstance(snapshot, ScheduleSnapshot):
             raise RepairAgentInputError("snapshot must be a ScheduleSnapshot.")
         if not isinstance(critic_result, CriticResult):
@@ -207,17 +247,23 @@ class RepairAgent:
 
         user_payload: dict[str, Any] = {
             "prompt_version": REPAIR_PROMPT_VERSION,
+            "repair_mode": "revision" if revision_context is not None else "initial",
             "schedule": schedule_snapshot_to_dict(snapshot),
             "critic_result": critic_result.to_dict(),
             "allowed_issue_task_ids": sorted(issue_task_ids),
             "care_rules": normalized_rules,
         }
+        if revision_context is not None:
+            user_payload["revision_context"] = revision_context
+
+        system_prompt = (
+            REPAIR_REVISION_SYSTEM_PROMPT
+            if revision_context is not None
+            else REPAIR_AGENT_SYSTEM_PROMPT
+        )
 
         try:
-            raw_response = self.ai_client.generate_json(
-                REPAIR_AGENT_SYSTEM_PROMPT,
-                user_payload,
-            )
+            raw_response = self.ai_client.generate_json(system_prompt, user_payload)
         except AIConfigError:
             raise
         except AIResponseParseError as exc:
@@ -254,3 +300,50 @@ class RepairAgent:
             )
 
         return result
+
+    def propose(
+        self,
+        snapshot: ScheduleSnapshot,
+        critic_result: CriticResult,
+        *,
+        retrieved_rules: object = (),
+    ) -> RepairResult:
+        """Propose the first structured repair; never validate or apply it."""
+        return self._request_repair(
+            snapshot,
+            critic_result,
+            retrieved_rules=retrieved_rules,
+        )
+
+    def revise(
+        self,
+        snapshot: ScheduleSnapshot,
+        critic_result: CriticResult,
+        previous_result: RepairResult,
+        validator_errors: object,
+        *,
+        retrieved_rules: object = (),
+    ) -> RepairResult:
+        """Request the one allowed correction after deterministic rejection.
+
+        Only typed, allowlisted context is sent back: the original snapshot,
+        critic result, project-controlled care rules, the previously parsed
+        proposed changes, and bounded validator error strings. No live objects,
+        task notes, environment values, or hidden reasoning are included.
+        """
+        if not isinstance(previous_result, RepairResult):
+            raise RepairAgentInputError("previous_result must be a RepairResult.")
+        normalized_errors = _normalize_validator_errors(validator_errors)
+
+        revision_context: dict[str, object] = {
+            "rejected_proposed_changes": previous_result.to_dict()[
+                "proposed_changes"
+            ],
+            "validator_errors": normalized_errors,
+        }
+        return self._request_repair(
+            snapshot,
+            critic_result,
+            retrieved_rules=retrieved_rules,
+            revision_context=revision_context,
+        )
