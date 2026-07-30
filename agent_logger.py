@@ -179,6 +179,61 @@ def build_agent_run_record(
     return record
 
 
+def _decision_change_records(result: object) -> tuple[list[str], list[str]]:
+    task_ids: list[str] = []
+    actions: list[str] = []
+    for change in getattr(result, "applied_changes", ()) or ():
+        task_id = _safe_text(getattr(change, "task_id", None))
+        action = _safe_text(getattr(change, "action", None))
+        if task_id:
+            task_ids.append(task_id)
+        if action:
+            actions.append(action)
+    return task_ids, actions
+
+
+def build_owner_decision_record(
+    run: object,
+    result: object,
+    *,
+    prompt_version: str,
+    timestamp: datetime | None = None,
+) -> dict[str, object]:
+    """Build a privacy-minimized approval/rejection record.
+
+    The record intentionally includes only schedule/version identifiers, task
+    IDs, action names, and outcome states. It never serializes owner names, pet
+    names, notes, reasons, raw prompts, or model responses.
+    """
+    if run is None:
+        raise AgentLogError("run must not be None.")
+    if result is None:
+        raise AgentLogError("decision result must not be None.")
+    if not isinstance(prompt_version, str) or not prompt_version.strip():
+        raise AgentLogError("prompt_version must be a non-empty string.")
+
+    snapshot = getattr(run, "snapshot", None)
+    task_ids, actions = _decision_change_records(result)
+    decision_status = _enum_value(getattr(result, "status", None), default="failed")
+    review_status = _enum_value(getattr(run, "status", None), default="failed")
+    success = getattr(result, "success", None)
+    if not isinstance(success, bool):
+        success = getattr(result, "rejected", False) is True
+
+    return {
+        "timestamp": _iso_utc(timestamp or _utc_now()),
+        "record_type": "owner_decision",
+        "prompt_version": prompt_version.strip()[:MAX_LOG_TEXT_CHARS],
+        "schedule_version": _safe_text(getattr(snapshot, "version", None)) or None,
+        "review_status": review_status,
+        "decision_status": decision_status,
+        "decision_success": success,
+        "task_ids": task_ids,
+        "actions": actions,
+        "final_status": decision_status,
+    }
+
+
 def _validate_json_tree(value: object) -> None:
     """Reject non-JSON values and non-finite numbers before filesystem writes."""
     stack = [value]
@@ -223,9 +278,26 @@ class AgentLogger:
         self.clock = clock
 
     def log_run(self, run: object, *, prompt_version: str) -> dict[str, object]:
-        """Serialize and append one run, returning the exact written record."""
+        """Serialize and append one review run, returning the written record."""
         record = build_agent_run_record(
             run,
+            prompt_version=prompt_version,
+            timestamp=self.clock(),
+        )
+        self.write_record(record)
+        return record
+
+    def log_decision(
+        self,
+        run: object,
+        result: object,
+        *,
+        prompt_version: str,
+    ) -> dict[str, object]:
+        """Append an approval or rejection outcome without private task content."""
+        record = build_owner_decision_record(
+            run,
+            result,
             prompt_version=prompt_version,
             timestamp=self.clock(),
         )

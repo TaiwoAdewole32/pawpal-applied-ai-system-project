@@ -1,10 +1,11 @@
-"""Phase 5.1 and 5.2 orchestration for PawPal Sentinel.
+"""Phase 5.1 through 5.6 orchestration for PawPal Sentinel.
 
 This service coordinates the existing deterministic scheduler, immutable
 snapshot builder, care-rule retriever, AI critic, AI repair agent, and
-ScheduleValidator. It never mutates a live task. A valid result stops at
-AWAITING_OWNER_APPROVAL; Phase 5.5 approval is the only place that may call
-apply_approved_changes().
+ScheduleValidator. Review generation never mutates a live task. A valid result stops at
+AWAITING_OWNER_APPROVAL; only Phase 5.5 approval may call
+apply_approved_changes(). Phase 5.3 limits repair correction to one revision,
+and Phase 5.4 records compact observable evidence in structured JSONL logs.
 """
 
 from __future__ import annotations
@@ -36,7 +37,16 @@ from retriever import (
     build_retrieval_query,
     retrieve_rules,
 )
-from schedule_validator import Conflict, ScheduleValidator, find_conflicts
+from schedule_validator import (
+    Conflict,
+    InvalidProposalError,
+    PersistenceApplyError,
+    ScheduleValidator,
+    SentinelApplyError,
+    StaleScheduleError,
+    apply_approved_changes,
+    find_conflicts,
+)
 from sentinel_models import (
     CriticResult,
     CriticStatus,
@@ -56,6 +66,44 @@ class WorkflowStatus(str, Enum):
     AI_UNAVAILABLE = "ai_unavailable"
     INVALID_AI_OUTPUT = "invalid_ai_output"
     FAILED = "failed"
+
+
+class ApprovalStatus(str, Enum):
+    APPROVED_AND_APPLIED = "approved_and_applied"
+    NOT_APPROVABLE = "not_approvable"
+    STALE_PROPOSAL = "stale_proposal"
+    INVALID_PROPOSAL = "invalid_proposal"
+    SAVE_FAILED = "save_failed"
+    FAILED = "failed"
+
+
+class RejectionStatus(str, Enum):
+    OWNER_REJECTED = "owner_rejected"
+    NOT_REJECTABLE = "not_rejectable"
+
+
+@dataclass(frozen=True)
+class ApprovalResult:
+    """Outcome of revalidating and applying an owner-approved proposal."""
+
+    success: bool
+    status: ApprovalStatus
+    message: str
+    applied_changes: tuple[ProposedChange, ...] = ()
+    validation: ValidationResult | None = None
+    current_snapshot: ScheduleSnapshot | None = None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RejectionResult:
+    """Outcome of declining a pending proposal without mutating live tasks."""
+
+    rejected: bool
+    status: RejectionStatus
+    message: str
+    applied_changes: tuple[ProposedChange, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -138,6 +186,10 @@ class PawPalSentinel:
         self.prompt_version = (
             f"critic:{CRITIC_PROMPT_VERSION}|repair:{REPAIR_PROMPT_VERSION}"
         )
+        # Prevent the same in-memory pending run from being approved after it
+        # was rejected or from being applied twice. Streamlit should still
+        # clear the pending run from session state after either decision.
+        self._closed_run_keys: set[tuple[int, str]] = set()
 
     @staticmethod
     def _proposal_payload(result: RepairResult) -> list[dict[str, object]]:
@@ -151,6 +203,22 @@ class PawPalSentinel:
                 "reason": change.reason,
             }
             for change in result.proposed_changes
+        ]
+
+    @staticmethod
+    def _changes_payload(
+        changes: tuple[ProposedChange, ...] | list[ProposedChange],
+    ) -> list[dict[str, object]]:
+        """Convert typed changes back through the validator's strict boundary."""
+        return [
+            {
+                "task_id": change.task_id,
+                "action": change.action,
+                "original_time": change.original_time,
+                "new_time": change.new_time,
+                "reason": change.reason,
+            }
+            for change in changes
         ]
 
     @staticmethod
@@ -348,6 +416,244 @@ class PawPalSentinel:
                 f"({type(exc).__name__})."
             )
         return replace(run, warnings=tuple((*run.warnings, warning)))
+
+    @staticmethod
+    def _run_key(run: object) -> tuple[int, str] | None:
+        if not isinstance(run, AgentRun) or run.snapshot is None:
+            return None
+        return (id(run), run.snapshot.version)
+
+    def _finalize_decision(
+        self,
+        run: object,
+        result: ApprovalResult | RejectionResult,
+    ) -> ApprovalResult | RejectionResult:
+        """Log one owner decision without letting logging break Streamlit."""
+        if self.logger is None:
+            return result
+        log_decision = getattr(self.logger, "log_decision", None)
+        if not callable(log_decision):
+            warning = "Structured owner-decision logging is unavailable."
+            return replace(result, warnings=tuple((*result.warnings, warning)))
+        try:
+            log_decision(run, result, prompt_version=self.prompt_version)
+            return result
+        except AgentLogError as exc:
+            warning = f"Structured owner-decision logging failed safely: {exc}"
+        except Exception as exc:
+            warning = (
+                "Structured owner-decision logging failed safely "
+                f"({type(exc).__name__})."
+            )
+        return replace(result, warnings=tuple((*result.warnings, warning)))
+
+    def approve(
+        self,
+        owner: Owner,
+        run: AgentRun,
+        *,
+        data_file: object = "data.json",
+    ) -> ApprovalResult:
+        """Revalidate, apply time-only moves, persist, and log the approval."""
+        result = self._approve_unlogged(owner, run, data_file=data_file)
+        return self._finalize_decision(run, result)
+
+    def _approve_unlogged(
+        self,
+        owner: Owner,
+        run: AgentRun,
+        *,
+        data_file: object,
+    ) -> ApprovalResult:
+        if not isinstance(owner, Owner):
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.FAILED,
+                message="Approval requires a valid Owner instance.",
+            )
+        if not isinstance(run, AgentRun):
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.NOT_APPROVABLE,
+                message="Approval requires a valid Sentinel AgentRun.",
+            )
+        run_key = self._run_key(run)
+        if run_key is not None and run_key in self._closed_run_keys:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.NOT_APPROVABLE,
+                message="This proposal has already received an owner decision.",
+            )
+        if not run.can_approve or run.snapshot is None:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.NOT_APPROVABLE,
+                message=(
+                    "This run is not awaiting approval with a valid movable repair."
+                ),
+            )
+
+        try:
+            current_snapshot = build_schedule_snapshot(owner)
+        except Exception as exc:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.FAILED,
+                message=(
+                    "The current schedule could not be rebuilt safely "
+                    f"({type(exc).__name__})."
+                ),
+            )
+
+        if current_snapshot.version != run.snapshot.version:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.STALE_PROPOSAL,
+                message=(
+                    "The schedule changed after review. Request a new Sentinel review "
+                    "before approving changes."
+                ),
+                current_snapshot=current_snapshot,
+            )
+
+        try:
+            fresh_validation = self.validator.validate(
+                current_snapshot,
+                self._changes_payload(run.validated_changes),
+            )
+            fresh_validation = self._require_reviewed_conflicts_resolved(
+                current_snapshot,
+                run.conflicts,
+                fresh_validation,
+            )
+        except Exception as exc:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.FAILED,
+                message=(
+                    "The proposal could not be revalidated safely "
+                    f"({type(exc).__name__})."
+                ),
+                current_snapshot=current_snapshot,
+            )
+
+        if not fresh_validation.valid or self._requires_human_review(fresh_validation):
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.INVALID_PROPOSAL,
+                message=(
+                    "The proposal no longer passes the approval guardrails. "
+                    "The original schedule was preserved."
+                ),
+                validation=fresh_validation,
+                current_snapshot=current_snapshot,
+            )
+
+        approved_changes = tuple(fresh_validation.normalized_changes)
+        try:
+            apply_approved_changes(
+                owner,
+                run.snapshot.version,
+                approved_changes,
+                data_file=data_file,
+            )
+        except StaleScheduleError as exc:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.STALE_PROPOSAL,
+                message=str(exc),
+                validation=fresh_validation,
+                current_snapshot=current_snapshot,
+            )
+        except InvalidProposalError as exc:
+            failed_validation = ValidationResult(
+                valid=False,
+                errors=list(exc.errors),
+                checks=dict(fresh_validation.checks),
+                normalized_changes=[],
+            )
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.INVALID_PROPOSAL,
+                message=(
+                    "Final approval validation failed. The original schedule was "
+                    "preserved."
+                ),
+                validation=failed_validation,
+                current_snapshot=current_snapshot,
+            )
+        except PersistenceApplyError as exc:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.SAVE_FAILED,
+                message=str(exc),
+                validation=fresh_validation,
+                current_snapshot=current_snapshot,
+            )
+        except SentinelApplyError as exc:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.FAILED,
+                message=f"Approved changes were not applied safely: {exc}",
+                validation=fresh_validation,
+                current_snapshot=current_snapshot,
+            )
+        except Exception as exc:
+            return ApprovalResult(
+                success=False,
+                status=ApprovalStatus.FAILED,
+                message=(
+                    "Approved changes were not applied "
+                    f"({type(exc).__name__}). The original schedule was preserved."
+                ),
+                validation=fresh_validation,
+                current_snapshot=current_snapshot,
+            )
+
+        warnings: list[str] = []
+        try:
+            final_snapshot = build_schedule_snapshot(owner)
+        except Exception as exc:
+            final_snapshot = None
+            warnings.append(
+                "The changes were saved, but the final schedule snapshot could not "
+                f"be rebuilt ({type(exc).__name__})."
+            )
+
+        if run_key is not None:
+            self._closed_run_keys.add(run_key)
+        return ApprovalResult(
+            success=True,
+            status=ApprovalStatus.APPROVED_AND_APPLIED,
+            message="The validated time changes were approved, applied, and saved.",
+            applied_changes=approved_changes,
+            validation=fresh_validation,
+            current_snapshot=final_snapshot,
+            warnings=tuple(warnings),
+        )
+
+    def reject(self, run: AgentRun) -> RejectionResult:
+        """Reject a pending valid proposal, make no changes, and log the choice."""
+        run_key = self._run_key(run)
+        if (
+            not isinstance(run, AgentRun)
+            or not run.can_approve
+            or run_key is None
+            or run_key in self._closed_run_keys
+        ):
+            result = RejectionResult(
+                rejected=False,
+                status=RejectionStatus.NOT_REJECTABLE,
+                message="Only an undecided valid proposal awaiting approval can be rejected.",
+            )
+        else:
+            self._closed_run_keys.add(run_key)
+            result = RejectionResult(
+                rejected=True,
+                status=RejectionStatus.OWNER_REJECTED,
+                message="The owner rejected the proposal. The original schedule remains unchanged.",
+            )
+        return self._finalize_decision(run, result)
 
     def review_plan(self, owner: Owner) -> AgentRun:
         """Execute, log exactly once, and stop before any live mutation."""

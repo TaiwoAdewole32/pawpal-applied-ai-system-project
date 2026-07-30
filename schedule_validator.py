@@ -4,15 +4,20 @@ This is the trust boundary: it never talks to an AI client, never touches
 `Owner`/`Scheduler`/`Task` directly, and never mutates anything. It only
 reasons about a `ScheduleSnapshot` (Phase 2.1) and a raw proposed-changes
 payload (as an AI would return it), and produces a `ValidationResult` the
-caller can act on. Applying an accepted proposal to the live schedule is a
-separate concern (Phase 2.5), not implemented here.
+caller can act on. The separate Phase 2.5/5.5 apply boundary revalidates,
+changes only preferred times, and persists atomically.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
+from collections.abc import Sequence
 
 from pawpal_system import FIXED_TASK_TYPES, Owner
 from sentinel_models import (
@@ -78,25 +83,112 @@ class InvalidProposalError(SentinelApplyError):
         super().__init__("; ".join(errors))
 
 
+class PersistenceApplyError(SentinelApplyError):
+    """A validated change could not be persisted; live task times were rolled back."""
+
+
 def _parse_time_string(value: str):
     """Inverse of sentinel_models._task_to_snapshot's preferred_time formatting."""
     return datetime.strptime(value, "%H:%M").time()
 
 
+def _validate_apply_inputs(
+    owner: Owner,
+    snapshot_version: object,
+    validated_changes: object,
+    data_file: object,
+) -> tuple[ProposedChange, ...]:
+    """Validate the approval boundary before rebuilding or mutating anything."""
+    if not isinstance(owner, Owner):
+        raise TypeError("owner must be an Owner instance.")
+    if not isinstance(snapshot_version, str) or not snapshot_version.strip():
+        raise ValueError("snapshot_version must be a non-empty string.")
+    if not isinstance(validated_changes, Sequence) or isinstance(
+        validated_changes, (str, bytes)
+    ):
+        raise TypeError("validated_changes must be a sequence of ProposedChange values.")
+    normalized = tuple(validated_changes)
+    if not normalized:
+        raise InvalidProposalError(["At least one validated change is required."])
+    for index, change in enumerate(normalized):
+        if not isinstance(change, ProposedChange):
+            raise TypeError(
+                f"validated_changes[{index}] must be a ProposedChange, "
+                f"got {type(change).__name__}."
+            )
+    if not isinstance(data_file, (str, os.PathLike)) or not os.fspath(data_file).strip():
+        raise ValueError("data_file must be a non-empty string or path-like value.")
+    return normalized
+
+
+def _owner_payload(owner: Owner) -> dict[str, object]:
+    """Build the same JSON shape as Owner.save_to_json without mutating the owner."""
+    return {
+        "name": owner.name,
+        "startTime": owner.startTime.isoformat(),
+        "endTime": owner.endTime.isoformat(),
+        "preferences": owner.preferences,
+        "pets": [pet.to_dict() for pet in owner.pets],
+        "tasks": [task.to_dict() for task in owner.scheduler.tasks],
+    }
+
+
+def _atomic_save_owner(owner: Owner, data_file: str | os.PathLike[str]) -> None:
+    """Write owner data to a temporary sibling and atomically replace the target.
+
+    The original file is not truncated if serialization or replacement fails.
+    This function intentionally performs no live task mutation.
+    """
+    target = Path(os.fspath(data_file))
+    parent = target.parent if str(target.parent) else Path(".")
+    temp_name: str | None = None
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        payload = _owner_payload(owner)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temp_name = stream.name
+            json.dump(payload, stream, indent=2, ensure_ascii=False, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, target)
+        temp_name = None
+    except (OSError, TypeError, ValueError) as exc:
+        raise PersistenceApplyError(
+            f"Approved changes could not be saved safely ({type(exc).__name__})."
+        ) from None
+    finally:
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+
+
 def apply_approved_changes(
     owner: Owner,
     snapshot_version: str,
-    validated_changes: list[ProposedChange],
-    data_file: str = "data.json",
+    validated_changes: Sequence[ProposedChange],
+    data_file: str | os.PathLike[str] = "data.json",
 ) -> None:
-    """Apply an already-validated proposal to the live schedule, or raise safely.
+    """Revalidate, atomically apply time-only moves, and persist or roll back.
 
-    Revalidates against a freshly-rebuilt snapshot before touching anything —
-    this is what makes staleness protection real, not just a version-string
-    comparison. Never partially mutates: every task is looked up and every
-    time is parsed before any live task is changed, and any unexpected
-    failure during the commit step rolls back everything already applied.
+    This is the only mutation boundary used by Phase 5.5. It rebuilds the
+    current snapshot, rejects stale or invalid proposals, prepares every task
+    lookup and parsed time before mutation, changes only ``preferredTime``, and
+    rolls all live task times back if either mutation or persistence fails.
     """
+    normalized_changes = _validate_apply_inputs(
+        owner, snapshot_version, validated_changes, data_file
+    )
+
     current_snapshot = build_schedule_snapshot(owner)
     if current_snapshot.version != snapshot_version:
         raise StaleScheduleError(
@@ -111,33 +203,41 @@ def apply_approved_changes(
             "new_time": change.new_time,
             "reason": change.reason,
         }
-        for change in validated_changes
+        for change in normalized_changes
     ]
     result = ScheduleValidator().validate(current_snapshot, proposal_dicts)
     if not result.valid:
         raise InvalidProposalError(result.errors)
 
     tasks_by_id = {task.taskId: task for task in owner.scheduler.tasks}
-    prepared = []  # (task, original_time, new_time) — nothing mutated yet
-    for change in validated_changes:
+    prepared: list[tuple[object, object, object]] = []
+    for change in result.normalized_changes:
         if change.action != "move":
             continue
         task = tasks_by_id.get(change.task_id)
         if task is None:
             raise InvalidProposalError([f"Task '{change.task_id}' no longer exists."])
-        prepared.append((task, task.preferredTime, _parse_time_string(change.new_time)))
+        if change.new_time is None:
+            raise InvalidProposalError(
+                [f"Task '{change.task_id}' has no new time for its move action."]
+            )
+        try:
+            parsed_time = _parse_time_string(change.new_time)
+        except (TypeError, ValueError):
+            raise InvalidProposalError(
+                [f"Task '{change.task_id}' has an invalid approved time."]
+            ) from None
+        prepared.append((task, task.preferredTime, parsed_time))
 
-    applied = []
     try:
-        for task, original_time, new_time in prepared:
+        for task, _original_time, new_time in prepared:
             task.updateTask("preferredTime", new_time)
-            applied.append((task, original_time))
+        _atomic_save_owner(owner, data_file)
     except Exception:
-        for task, original_time in applied:
-            task.updateTask("preferredTime", original_time)
+        # Direct assignment avoids any custom update hook failing during rollback.
+        for task, original_time, _new_time in prepared:
+            task.preferredTime = original_time
         raise
-
-    owner.save_to_json(data_file)
 
 
 class ScheduleValidator:
