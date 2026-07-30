@@ -31,6 +31,120 @@ _JSON_FENCE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+# Gemini API model identifiers use the ``gemini-...`` family.  The SDK also
+# accepts a leading ``models/`` prefix, which we normalize away so logs and UI
+# messages use one consistent form.
+_MODEL_ID_PATTERN = re.compile(r"^gemini-[a-z0-9][a-z0-9._-]*$", re.IGNORECASE)
+
+
+def _select_model_name(
+    explicit_model: str | None,
+    environment_model: object,
+) -> tuple[str, str | None]:
+    """Return a valid Gemini model ID and an optional configuration warning.
+
+    An explicitly supplied model is a programmer-controlled value, so an
+    invalid value raises immediately.  An invalid environment value is treated
+    as recoverable configuration drift: the client falls back to the known
+    project default and exposes a warning for Streamlit to display.  This keeps
+    normal PawPal+ usable and prevents a malformed model label from reaching the
+    SDK as a 400 request.
+    """
+    if explicit_model is not None:
+        if not isinstance(explicit_model, str) or not explicit_model.strip():
+            raise AIConfigError("model_name must be a non-empty Gemini model ID.")
+        candidate = explicit_model.strip()
+        source = "explicit"
+    else:
+        candidate = environment_model.strip() if isinstance(environment_model, str) else ""
+        source = "environment"
+
+    if not candidate:
+        return DEFAULT_MODEL_NAME, None
+
+    normalized = candidate
+    if normalized.lower().startswith("models/"):
+        normalized = normalized[7:]
+
+    if _MODEL_ID_PATTERN.fullmatch(normalized):
+        return normalized.lower(), None
+
+    if source == "explicit":
+        raise AIConfigError(
+            "model_name must be a Gemini model ID such as "
+            f"'{DEFAULT_MODEL_NAME}'."
+        )
+
+    return (
+        DEFAULT_MODEL_NAME,
+        "PAWPAL_MODEL_NAME was not a valid Gemini model ID, so PawPal Sentinel "
+        f"is using the safe default '{DEFAULT_MODEL_NAME}'.",
+    )
+
+
+def _safe_request_error(
+    exc: Exception,
+    *,
+    secret: str | None = None,
+) -> str:
+    """Classify an SDK failure while removing any exposed credential.
+
+    The raw third-party exception is never returned to the caller. When the
+    configured API key appears in that exception, the user-facing message
+    includes a ``[REDACTED]`` marker so tests and logs can verify that secret
+    removal occurred without exposing the credential or surrounding SDK text.
+    """
+    raw_text = str(exc)
+    secret_was_present = bool(secret and secret in raw_text)
+
+    # Redact before inspecting the message so no later branch accidentally
+    # works with the literal credential value.
+    sanitized_text = _redact_secret(raw_text, secret)
+    normalized_text = sanitized_text.lower()
+    error_type = type(exc).__name__
+
+    if any(
+        token in normalized_text
+        for token in ("timed out", "timeout", "deadline exceeded")
+    ):
+        message = "The AI request timed out. Try the review again in a moment."
+    elif "unexpected model name format" in normalized_text or (
+        "invalid_argument" in normalized_text and "model" in normalized_text
+    ):
+        message = (
+            "The configured Gemini model name is invalid. Set PAWPAL_MODEL_NAME "
+            f"to a model ID such as '{DEFAULT_MODEL_NAME}', or leave it blank "
+            "to use the default."
+        )
+    elif any(
+        token in normalized_text
+        for token in ("429", "resource_exhausted", "rate limit")
+    ):
+        message = "The AI service rate limit was reached. Try again later."
+    elif any(
+        token in normalized_text
+        for token in ("401", "403", "unauthorized", "permission_denied")
+    ):
+        message = (
+            "The AI request was not authorized. "
+            "Verify the Gemini API key and model access."
+        )
+    elif any(
+        token in normalized_text
+        for token in ("connection", "network", "dns", "unavailable")
+    ):
+        message = (
+            "The AI service could not be reached. "
+            "Check the connection and try again."
+        )
+    else:
+        message = f"The AI request failed safely ({error_type})."
+
+    if secret_was_present:
+        message += " Sensitive credential data was removed: [REDACTED]."
+
+    return message
+
 
 class AIConfigError(RuntimeError):
     """Raised when the AI client is missing configuration or cannot run safely."""
@@ -209,17 +323,18 @@ class GeminiAIClient:
             ) from None
 
         self._api_key = api_key
-        selected_model = model_name or os.getenv("PAWPAL_MODEL_NAME") or DEFAULT_MODEL_NAME
-        if not isinstance(selected_model, str) or not selected_model.strip():
-            raise AIConfigError("PAWPAL_MODEL_NAME must be a non-empty string.")
-        self.model_name = selected_model.strip()
+        self.model_name, self.configuration_warning = _select_model_name(
+            model_name,
+            os.getenv("PAWPAL_MODEL_NAME"),
+        )
 
         try:
             self.client = genai.Client(api_key=api_key)
         except Exception as exc:
-            safe_message = _redact_secret(str(exc), api_key)
+            # Do not echo raw SDK setup text because some clients include
+            # headers or request details in exception messages.
             raise AIConfigError(
-                f"AI client setup failed ({type(exc).__name__}): {safe_message}"
+                f"AI client setup failed safely ({type(exc).__name__})."
             ) from None
 
     def generate_json(self, system_prompt: str, user_payload: dict) -> dict[str, Any]:
@@ -254,9 +369,10 @@ class GeminiAIClient:
             )
             raw_text = getattr(response, "text", None)
         except Exception as exc:
-            safe_message = _redact_secret(str(exc), self._api_key)
+            # Classification uses only a sanitized copy of the exception text.
+            # The literal API key and raw SDK payload never reach Streamlit or logs.
             raise AIConfigError(
-                f"AI request failed ({type(exc).__name__}): {safe_message}"
+                _safe_request_error(exc, secret=self._api_key)
             ) from None
 
         # Keep malformed model output distinct from configuration/network errors
