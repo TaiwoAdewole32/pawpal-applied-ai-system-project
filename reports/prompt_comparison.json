@@ -1,0 +1,277 @@
+{
+  "ok": true,
+  "mode": "fixture",
+  "generated_at": "2026-07-30T23:13:49.302142Z",
+  "baseline_prompt": "Review this pet-care schedule and improve it.",
+  "specialized_prompt_version": "pawpal-repair-v2-few-shot",
+  "scenario_ids": [
+    "medication_conflict_with_flexible_walk",
+    "two_fixed_tasks_overlap",
+    "flexible_walk_outside_availability",
+    "repair_creates_new_conflict",
+    "capacity_exceeds_availability_window"
+  ],
+  "per_scenario": [
+    {
+      "id": "medication_conflict_with_flexible_walk",
+      "baseline": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": false,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": false,
+          "medication_tasks_unchanged": false,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": false,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": false
+      },
+      "specialized": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": true,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": true
+      }
+    },
+    {
+      "id": "two_fixed_tasks_overlap",
+      "baseline": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": false,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": false,
+          "medication_tasks_unchanged": false,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": false,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": false
+      },
+      "specialized": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": true,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": true
+      }
+    },
+    {
+      "id": "flexible_walk_outside_availability",
+      "baseline": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": false,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": false,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": false
+      },
+      "specialized": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": true,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": true
+      }
+    },
+    {
+      "id": "repair_creates_new_conflict",
+      "baseline": {
+        "structured_output_valid": false,
+        "structured_output_error": "AIResponseValidationError: repair response.proposed_changes[0] contains unknown field(s): new_duration.",
+        "validator_valid": false,
+        "checks": {
+          "schema_valid": false,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": false,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": false
+      },
+      "specialized": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": true,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": true
+      }
+    },
+    {
+      "id": "capacity_exceeds_availability_window",
+      "baseline": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": false,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": false,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": false
+      },
+      "specialized": {
+        "structured_output_valid": true,
+        "structured_output_error": null,
+        "validator_valid": true,
+        "checks": {
+          "schema_valid": true,
+          "task_ids_known": true,
+          "actions_allowed": true,
+          "fixed_tasks_unchanged": true,
+          "medication_tasks_unchanged": true,
+          "times_valid": true,
+          "inside_availability": true,
+          "no_new_conflicts": true,
+          "protected_fields_unchanged": true,
+          "proposal_not_stale": true
+        },
+        "fixed_tasks_preserved": true,
+        "unknown_task_ids_present": false,
+        "conflict_free_accepted": true
+      }
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "valid_structured_outputs": [
+        4,
+        5
+      ],
+      "fixed_tasks_preserved": [
+        3,
+        5
+      ],
+      "unsafe_proposals": [
+        5,
+        5
+      ],
+      "unknown_task_ids": [
+        0,
+        5
+      ],
+      "conflict_free_accepted": [
+        0,
+        5
+      ]
+    },
+    "specialized": {
+      "valid_structured_outputs": [
+        5,
+        5
+      ],
+      "fixed_tasks_preserved": [
+        5,
+        5
+      ],
+      "unsafe_proposals": [
+        0,
+        5
+      ],
+      "unknown_task_ids": [
+        0,
+        5
+      ],
+      "conflict_free_accepted": [
+        5,
+        5
+      ]
+    }
+  }
+}

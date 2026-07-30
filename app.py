@@ -1,4 +1,5 @@
 import datetime
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 from pawpal_system import Pet, Priority, Task, Owner, Flexibility, format_time, format_duration
@@ -18,6 +19,15 @@ st.title("🐾 PawPal+")
 st.markdown(
     """
     <style>
+    /* Hide Streamlit's built-in chrome: the colored top decoration bar,
+       the hamburger/menu toolbar, and the running-status widget. */
+    div[data-testid="stDecoration"],
+    div[data-testid="stToolbar"],
+    div[data-testid="stStatusWidget"],
+    #MainMenu {
+        display: none !important;
+    }
+
     /* Generate Schedule / Generate AI Review: make the primary CTA green */
     button[kind="primary"] {
         background-color: #2e7d32 !important;
@@ -75,11 +85,14 @@ st.markdown(
         align-items: center;
         transition: background-color 0.15s ease;
     }
-    /* Hide the native radio dot entirely (wrapper div, the input itself, and
-       any decorative circle inside it) -- the highlight communicates
-       selection instead, matching the reference icon-nav style. */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label input[type="radio"] {
+    /* Hide the native radio dot entirely (the input itself, and the
+       decorative circle rendered next to the label text) -- the highlight
+       communicates selection instead, matching the reference icon-nav
+       style. Targeted structurally (sibling of the markdown container)
+       rather than by hashed emotion class names, which change across
+       Streamlit builds. */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label input[type="radio"],
+    section[data-testid="stSidebar"] div[role="radiogroup"] label div:has(> div[data-testid="stMarkdownContainer"]) > div:not([data-testid="stMarkdownContainer"]) {
         display: none !important;
         width: 0 !important;
         height: 0 !important;
@@ -1901,11 +1914,31 @@ def render_task_section() -> None:
         render_task_card(task, owner, key_prefix="queued")
 
 
+def _schedule_grid_rows(tasks: list[Task]) -> list[dict[str, str]]:
+    """Build one display row per task for the daily-plan grid, notes included
+    only when the task actually has any."""
+    rows = []
+    for task in tasks:
+        row = {
+            "Time": format_time(task.preferredTime),
+            "Task": task.taskName,
+            "Pet": task.pet.name,
+            "Duration": format_duration(task.durationMinutes),
+            "Priority": priority_badge(task.priority),
+            "Flexibility": flexibility_badge(task.flexibility),
+            "Notes": task.notes if task.notes else "",
+        }
+        rows.append(row)
+    return rows
+
+
 def render_current_schedule(owner: Owner) -> None:
     scheduler = owner.scheduler
     if not getattr(scheduler, "planGenerated", False):
         st.info("Select Generate Schedule to create the current daily plan.")
         return
+
+    st.markdown(f"**Today's Date:** {datetime.date.today().strftime('%A, %B %d, %Y')}")
 
     if not scheduler.dailyPlan:
         st.info("No tasks were scheduled for the current day.")
@@ -1916,17 +1949,20 @@ def render_current_schedule(owner: Owner) -> None:
             f"{format_duration(total_minutes)} of "
             f"{format_duration(scheduler.timeAvailable)} used."
         )
-        for task in sorted(
-            scheduler.dailyPlan,
-            key=lambda item: item.preferredTime,
-        ):
-            with st.container(border=True):
-                st.markdown(f"**{format_time(task.preferredTime)} | {task.taskName}**")
-                st.write(
-                    f"{task.pet.name} · {format_duration(task.durationMinutes)} · "
-                    f"{priority_badge(task.priority)} · "
-                    f"{flexibility_badge(task.flexibility)}"
-                )
+
+        sort_choice = st.radio(
+            "Sort by",
+            ["Time", "Priority"],
+            horizontal=True,
+            key="generated_schedule_sort_choice",
+        )
+        if sort_choice == "Priority":
+            ordered_tasks = scheduler.sortTasksByPriority(scheduler.dailyPlan)
+        else:
+            ordered_tasks = scheduler.sort_by_time(scheduler.dailyPlan)
+
+        grid_df = pd.DataFrame(_schedule_grid_rows(ordered_tasks))
+        st.dataframe(grid_df, hide_index=True, use_container_width=True)
 
     if scheduler.unscheduledTasks:
         st.markdown("### Not Scheduled")
@@ -2027,37 +2063,20 @@ def render_ai_generation_control(owner: Owner) -> None:
 
     if st.button("Generate AI Review", type="primary", use_container_width=True):
         progress = st.progress(0, text="Preparing the current schedule...")
-        with st.status(
-            "PawPal Sentinel is reviewing the plan...",
-            expanded=True,
-        ) as review_status_box:
-            st.write("Creating a fresh deterministic draft.")
-            progress.progress(20, text="Creating the deterministic draft...")
-            st.write("Running the AI critic and safe repair workflow.")
-            progress.progress(45, text="Reviewing conflicts and task flexibility...")
-            run = run_sentinel_review(owner)
-            progress.progress(90, text="Checking all proposed changes with guardrails...")
+        progress.progress(20, text="Creating the deterministic draft...")
+        progress.progress(45, text="Reviewing conflicts and task flexibility...")
+        run = run_sentinel_review(owner)
+        progress.progress(90, text="Checking all proposed changes with guardrails...")
 
-            run_status = _enum_text(getattr(run, "status", None), "failed")
-            if run is not None and run_status in {
-                WorkflowStatus.NO_REPAIR_NEEDED.value,
-                WorkflowStatus.AWAITING_OWNER_APPROVAL.value,
-                WorkflowStatus.HUMAN_REVIEW_REQUIRED.value,
-            }:
-                st.write("Review complete. Preparing the user-facing results.")
-                progress.progress(100, text="Review complete.")
-                review_status_box.update(
-                    label="AI review completed safely.",
-                    state="complete",
-                    expanded=False,
-                )
-            else:
-                progress.progress(100, text="Review stopped without changing the schedule.")
-                review_status_box.update(
-                    label="AI review stopped safely. No changes were applied.",
-                    state="error",
-                    expanded=True,
-                )
+        run_status = _enum_text(getattr(run, "status", None), "failed")
+        if run is not None and run_status in {
+            WorkflowStatus.NO_REPAIR_NEEDED.value,
+            WorkflowStatus.AWAITING_OWNER_APPROVAL.value,
+            WorkflowStatus.HUMAN_REVIEW_REQUIRED.value,
+        }:
+            progress.progress(100, text="Review complete.")
+        else:
+            progress.progress(100, text="Review stopped without changing the schedule.")
 
 
 def render_ai_review_section() -> None:

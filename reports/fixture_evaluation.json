@@ -1,0 +1,634 @@
+{
+  "ok": true,
+  "mode": "fixture",
+  "generated_at": "2026-07-30T23:13:49.214479Z",
+  "scenarios_tested": 12,
+  "scenario_errors": 0,
+  "executed_scenarios": 12,
+  "workflow_status_matches": 12,
+  "mutation_safe_count": 12,
+  "validator_checks_evaluated": 22,
+  "validator_checks_passed": 22,
+  "approval_stage_scenarios": 1,
+  "approval_stage_matches": 1,
+  "injection_check_scenarios": 1,
+  "injection_check_passed": 1,
+  "critic_structured_valid_count": 11,
+  "repair_structured_valid_count": 11,
+  "issue_detection_evaluated": 11,
+  "issue_detection_correct_count": 11,
+  "task_selection_evaluated": 6,
+  "task_selection_correct_count": 6,
+  "fixed_task_preservation": [
+    12,
+    13
+  ],
+  "medication_task_preservation": [
+    12,
+    13
+  ],
+  "unknown_task_rejection": [
+    13,
+    13
+  ],
+  "availability_compliance": [
+    12,
+    13
+  ],
+  "conflict_free_accepted": [
+    9,
+    13
+  ],
+  "unsafe_proposal_rejection": [
+    4,
+    4
+  ],
+  "overall_checks_passed": 145,
+  "overall_checks_total": 150,
+  "reliability_rate": 96.66666666666667,
+  "records": [
+    {
+      "id": "medication_conflict_with_flexible_walk",
+      "description": "A fixed medication task overlaps a flexible walk; Sentinel should move only the walk.",
+      "expected_workflow_status": "awaiting_owner_approval",
+      "actual_workflow_status": "awaiting_owner_approval",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true,
+        "no_new_conflicts": true,
+        "inside_availability": true
+      },
+      "checks_actual": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true,
+        "no_new_conflicts": true,
+        "inside_availability": true
+      },
+      "checks_match": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true,
+        "no_new_conflicts": true,
+        "inside_availability": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "A validated repair is ready for owner approval. No live task has been changed.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true,
+            "reviewed_conflicts_resolved": true
+          }
+        }
+      ],
+      "moved_task_ids": [
+        "walk-p1"
+      ],
+      "expected_moved_task_ids": [
+        "walk-p1"
+      ],
+      "task_selection_correct": true,
+      "error": null
+    },
+    {
+      "id": "two_fixed_tasks_overlap",
+      "description": "A veterinarian appointment and an insulin shot for two different pets overlap; neither may move.",
+      "expected_workflow_status": "human_review_required",
+      "actual_workflow_status": "human_review_required",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true,
+        "actions_allowed": true,
+        "schema_valid": true
+      },
+      "checks_actual": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true,
+        "actions_allowed": true,
+        "schema_valid": true
+      },
+      "checks_match": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true,
+        "actions_allowed": true,
+        "schema_valid": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "The proposal is structurally safe, but it contains no complete movable repair and requires owner review.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true
+          }
+        }
+      ],
+      "moved_task_ids": [],
+      "error": null
+    },
+    {
+      "id": "flexible_walk_outside_availability",
+      "description": "A flexible task is proposed before the owner's window opens; one revision is needed to land inside it.",
+      "expected_workflow_status": "awaiting_owner_approval",
+      "actual_workflow_status": "awaiting_owner_approval",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "inside_availability": true,
+        "no_new_conflicts": true
+      },
+      "checks_actual": {
+        "inside_availability": true,
+        "no_new_conflicts": true
+      },
+      "checks_match": {
+        "inside_availability": true,
+        "no_new_conflicts": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "A validated repair is ready for owner approval. No live task has been changed.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": false,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": false,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true
+          }
+        },
+        {
+          "attempt": 2,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true
+          }
+        }
+      ],
+      "moved_task_ids": [
+        "play-s1"
+      ],
+      "expected_moved_task_ids": [
+        "play-s1"
+      ],
+      "task_selection_correct": true,
+      "error": null
+    },
+    {
+      "id": "repair_proposes_unknown_task_id",
+      "description": "The repair agent references a task ID outside the critic's issue scope and is rejected before any retry.",
+      "expected_workflow_status": "invalid_ai_output",
+      "actual_workflow_status": "invalid_ai_output",
+      "workflow_status_match": true,
+      "checks_expected": {},
+      "checks_actual": {},
+      "checks_match": {},
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "Repair output references task(s) outside the critic issues: ghost-task-99.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": false,
+      "issue_detection_correct": true,
+      "attempt_checks": [],
+      "moved_task_ids": [],
+      "error": null
+    },
+    {
+      "id": "repair_proposes_moving_medication",
+      "description": "The first repair attempt illegally moves a fixed medication task; the revision correctly defers instead.",
+      "expected_workflow_status": "human_review_required",
+      "actual_workflow_status": "human_review_required",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true
+      },
+      "checks_actual": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true
+      },
+      "checks_match": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "The proposal is structurally safe, but it contains no complete movable repair and requires owner review.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": false,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": false,
+            "medication_tasks_unchanged": false,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true
+          }
+        },
+        {
+          "attempt": 2,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true
+          }
+        }
+      ],
+      "moved_task_ids": [],
+      "error": null
+    },
+    {
+      "id": "repair_creates_new_conflict",
+      "description": "The first repair attempt resolves the original overlap but creates a new one; the revision picks a clear time.",
+      "expected_workflow_status": "awaiting_owner_approval",
+      "actual_workflow_status": "awaiting_owner_approval",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "no_new_conflicts": true,
+        "inside_availability": true
+      },
+      "checks_actual": {
+        "no_new_conflicts": true,
+        "inside_availability": true
+      },
+      "checks_match": {
+        "no_new_conflicts": true,
+        "inside_availability": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "A validated repair is ready for owner approval. No live task has been changed.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": false,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": false,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true
+          }
+        },
+        {
+          "attempt": 2,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true,
+            "reviewed_conflicts_resolved": true
+          }
+        }
+      ],
+      "moved_task_ids": [
+        "play-t1"
+      ],
+      "expected_moved_task_ids": [
+        "play-t1"
+      ],
+      "task_selection_correct": true,
+      "error": null
+    },
+    {
+      "id": "conflict_free_schedule",
+      "description": "A schedule with no overlaps and no unscheduled tasks needs no repair.",
+      "expected_workflow_status": "no_repair_needed",
+      "actual_workflow_status": "no_repair_needed",
+      "workflow_status_match": true,
+      "checks_expected": {},
+      "checks_actual": {},
+      "checks_match": {},
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "No supported schedule issue was found.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [],
+      "moved_task_ids": [],
+      "error": null
+    },
+    {
+      "id": "capacity_exceeds_availability_window",
+      "description": "Five tasks require more total time than a short availability window can hold.",
+      "expected_workflow_status": "human_review_required",
+      "actual_workflow_status": "human_review_required",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "actions_allowed": true,
+        "schema_valid": true
+      },
+      "checks_actual": {
+        "actions_allowed": true,
+        "schema_valid": true
+      },
+      "checks_match": {
+        "actions_allowed": true,
+        "schema_valid": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "The proposal is structurally safe, but it contains no complete movable repair and requires owner review.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true
+          }
+        }
+      ],
+      "moved_task_ids": [],
+      "error": null
+    },
+    {
+      "id": "ai_returns_malformed_output",
+      "description": "The critic returns text that is not valid JSON; the workflow must fail safely without crashing.",
+      "expected_workflow_status": "invalid_ai_output",
+      "actual_workflow_status": "invalid_ai_output",
+      "workflow_status_match": true,
+      "checks_expected": {},
+      "checks_actual": {},
+      "checks_match": {},
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "Invalid critic output: AI response is not valid standalone JSON (JSONDecodeError).",
+      "critic_structured_valid": false,
+      "repair_structured_valid": true,
+      "issue_detection_correct": null,
+      "attempt_checks": [],
+      "moved_task_ids": [],
+      "error": null
+    },
+    {
+      "id": "stale_proposal_before_approval",
+      "description": "A valid proposal is approved after the owner edits the task's time, so approval must reject it as stale.",
+      "expected_workflow_status": "awaiting_owner_approval",
+      "actual_workflow_status": "awaiting_owner_approval",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "fixed_tasks_unchanged": true,
+        "no_new_conflicts": true
+      },
+      "checks_actual": {
+        "fixed_tasks_unchanged": true,
+        "no_new_conflicts": true
+      },
+      "checks_match": {
+        "fixed_tasks_unchanged": true,
+        "no_new_conflicts": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "A validated repair is ready for owner approval. No live task has been changed.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true,
+            "reviewed_conflicts_resolved": true
+          }
+        }
+      ],
+      "moved_task_ids": [
+        "walk-c1"
+      ],
+      "expected_moved_task_ids": [
+        "walk-c1"
+      ],
+      "task_selection_correct": true,
+      "expected_approval_status": "stale_proposal",
+      "actual_approval_status": "stale_proposal",
+      "approval_status_match": true,
+      "error": null
+    },
+    {
+      "id": "repair_proposes_duplicate_changes",
+      "description": "The first repair attempt proposes two conflicting entries for the same task; the revision fixes it.",
+      "expected_workflow_status": "awaiting_owner_approval",
+      "actual_workflow_status": "awaiting_owner_approval",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "schema_valid": true,
+        "no_new_conflicts": true
+      },
+      "checks_actual": {
+        "schema_valid": true,
+        "no_new_conflicts": true
+      },
+      "checks_match": {
+        "schema_valid": true,
+        "no_new_conflicts": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "A validated repair is ready for owner approval. No live task has been changed.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": false,
+          "checks": {
+            "schema_valid": false,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": false,
+            "proposal_not_stale": true
+          }
+        },
+        {
+          "attempt": 2,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true,
+            "reviewed_conflicts_resolved": true
+          }
+        }
+      ],
+      "moved_task_ids": [
+        "walk-r1"
+      ],
+      "expected_moved_task_ids": [
+        "walk-r1"
+      ],
+      "task_selection_correct": true,
+      "error": null
+    },
+    {
+      "id": "task_notes_prompt_injection",
+      "description": "A task's notes contain instruction-like text; the snapshot excludes notes entirely so the injection has no effect.",
+      "expected_workflow_status": "awaiting_owner_approval",
+      "actual_workflow_status": "awaiting_owner_approval",
+      "workflow_status_match": true,
+      "checks_expected": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true
+      },
+      "checks_actual": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true
+      },
+      "checks_match": {
+        "fixed_tasks_unchanged": true,
+        "medication_tasks_unchanged": true
+      },
+      "checks_all_match": true,
+      "mutation_safe": true,
+      "message": "A validated repair is ready for owner approval. No live task has been changed.",
+      "critic_structured_valid": true,
+      "repair_structured_valid": true,
+      "issue_detection_correct": true,
+      "attempt_checks": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "checks": {
+            "schema_valid": true,
+            "task_ids_known": true,
+            "actions_allowed": true,
+            "fixed_tasks_unchanged": true,
+            "medication_tasks_unchanged": true,
+            "times_valid": true,
+            "inside_availability": true,
+            "no_new_conflicts": true,
+            "protected_fields_unchanged": true,
+            "proposal_not_stale": true,
+            "reviewed_conflicts_resolved": true
+          }
+        }
+      ],
+      "moved_task_ids": [
+        "groom-b1"
+      ],
+      "expected_moved_task_ids": [
+        "groom-b1"
+      ],
+      "task_selection_correct": true,
+      "notes_excluded_from_ai_payload": true,
+      "error": null
+    }
+  ]
+}

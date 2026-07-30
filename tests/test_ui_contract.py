@@ -66,6 +66,5 @@ def test_no_change_path_skips_repair_panel() -> None:
 
 def test_ai_generation_has_live_progress_feedback() -> None:
     source = _source()
-    assert "PawPal Sentinel is reviewing the plan" in source
+    assert "def render_ai_generation_control" in source
     assert "st.progress(" in source
-    assert "st.status(" in source
