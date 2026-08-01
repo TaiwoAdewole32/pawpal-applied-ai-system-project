@@ -1,0 +1,95 @@
+flowchart TD
+
+    subgraph INPUT["Input"]
+        A["Owner enters pets, tasks, availability\n(Streamlit app.py forms)"]
+        A1["Owner / Pet / Task objects\n(pawpal_system.py)"]
+        A2["owner.save_to_json() -> data.json"]
+        A --> A1 --> A2
+    end
+
+    subgraph SCHED["Deterministic Scheduling"]
+        B["Scheduler.generatePlan()\n(pawpal_system.py) - draft plan"]
+        B1["build_schedule_snapshot(owner)\n(sentinel_models.py) -> ScheduleSnapshot + version hash"]
+        B2["find_conflicts()\n(schedule_validator.py) -> conflict/availability evidence"]
+        B --> B1 --> B2
+    end
+
+    subgraph RETR["Retrieval"]
+        R1["build_retrieval_query()\n(retriever.py)"]
+        R2["retrieve_rules()\n(retriever.py) - keyword search"]
+        R3[("data/care_rules.md")]
+        R1 --> R2
+        R3 --> R2
+    end
+
+    subgraph AI["AI Review & Repair Loop"]
+        E["PlanCritic.critique()\n(plan_critic.py) -> CriticResult"]
+        AIC["AIClient.generate_json()\n(ai_client.py / GeminiAIClient)"]
+        D1{"Critic finds\nreal issues?"}
+        F["RepairAgent.propose()\n(repair_agent.py, attempt 1) -> RepairResult"]
+        G["ScheduleValidator.validate()\n(schedule_validator.py) -> ValidationResult"]
+        D2{"Valid?\n(attempt 1)"}
+        F2["RepairAgent.revise()\n(repair_agent.py, attempt 2, with validator errors)"]
+        G2["ScheduleValidator.validate()\n(attempt 2)"]
+        D3{"Valid?\n(attempt 2, final)"}
+
+        E -.-> AIC
+        F -.-> AIC
+        F2 -.-> AIC
+        E --> D1
+        D1 -- No, unsupported / no change needed --> P9["NO_REPAIR_NEEDED"]
+        D1 -- Yes --> F
+        F --> G --> D2
+        D2 -- No, first attempt --> F2
+        D2 -- Yes --> P10["AWAITING_OWNER_APPROVAL\n(if real 'move' change)\nor HUMAN_REVIEW_REQUIRED (keep/defer only)"]
+        F2 --> G2 --> D3
+        D3 -- No, final attempt --> P9b["HUMAN_REVIEW_REQUIRED\n(original schedule untouched)"]
+        D3 -- Yes --> P10
+    end
+
+    subgraph HUMAN["Human Approval"]
+        UI1["Streamlit displays critic issues,\nvalidated changes, validator evidence"]
+        D4{"Owner approves?"}
+        P11["PawPalSentinel.approve()\n- reject on version mismatch (STALE_PROPOSAL)\n- revalidate stored changes\n- apply_approved_changes(): mutate ONLY\n  Task.preferredTime for action='move'\n  (atomic write to data.json)"]
+        P12["PawPalSentinel.reject()\n- no mutation"]
+        UI1 --> D4
+        D4 -- Approve --> P11
+        D4 -- Reject --> P12
+    end
+
+    subgraph OUT["Output & Logging"]
+        L1["AgentLogger.log_run()\n(agent_logger.py)"]
+        L2["AgentLogger.log_decision()\n(agent_logger.py)"]
+        LOG[("logs/runtime_agent_runs.jsonl")]
+        OUT1["Final schedule displayed\n(Streamlit app.py)"]
+        L1 --> LOG
+        L2 --> LOG
+        P11 --> OUT1
+        P12 --> OUT1
+    end
+
+    subgraph EVAL["Evaluation Harness (offline)"]
+        N["evaluate.py\n(fixture ScenarioAIClient or live GeminiAIClient)"]
+    end
+
+    A2 --> B
+    B2 --> R1
+    R2 --> E
+    P9 --> UI1
+    P9b --> UI1
+    P10 --> UI1
+
+    E --> L1
+    F --> L1
+    G --> L1
+    F2 --> L1
+    G2 --> L1
+    P11 --> L2
+    P12 --> L2
+
+    N -.-> B
+    N -.-> R2
+    N -.-> E
+    N -.-> F
+    N -.-> G
+    N -.-> P11

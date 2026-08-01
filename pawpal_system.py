@@ -13,6 +13,53 @@ class Priority(str, Enum):
     MEDIUM = "medium"
     HIGH   = "high"
 
+class Flexibility(str, Enum):
+    FIXED = "fixed"
+    PREFERRED = "preferred"
+    FLEXIBLE = "flexible"
+
+
+FIXED_TASK_TYPES = {
+    "medication",
+    "vet",
+    "veterinarian",
+    "vet appointment",
+    "veterinarian appointment",
+    "appointment",
+}
+PREFERRED_TASK_TYPES = {"feed", "feeding", "meal"}
+
+
+def resolve_flexibility(task_type: str, requested: "str | Flexibility | None") -> Flexibility:
+    """Determine the effective flexibility for a task type, enforcing protected-type rules."""
+    normalized_type = (task_type or "").strip().lower()
+
+    if requested is None:
+        if normalized_type in FIXED_TASK_TYPES:
+            value = Flexibility.FIXED
+        elif normalized_type in PREFERRED_TASK_TYPES:
+            value = Flexibility.PREFERRED
+        else:
+            value = Flexibility.FLEXIBLE
+    elif isinstance(requested, Flexibility):
+        value = requested
+    elif isinstance(requested, str):
+        try:
+            value = Flexibility(requested)
+        except ValueError:
+            raise ValueError(
+                f"Invalid flexibility '{requested}'. Allowed values: fixed, preferred, flexible."
+            )
+    else:
+        raise TypeError(
+            f"flexibility must be a string or Flexibility, got {type(requested).__name__}."
+        )
+
+    # Protected task types can never be weakened below fixed, regardless of what was requested.
+    if normalized_type in FIXED_TASK_TYPES:
+        return Flexibility.FIXED
+    return value
+
 
 def format_time(t: Time) -> str:
     """Format a time as 12-hour clock with AM/PM, no leading zero (e.g. '5:00 PM')."""
@@ -130,6 +177,7 @@ class Task:
         "durationMinutes",
         "priority",
         "preferredTime",
+        "flexibility",
         "recurrence",
         "dueDate",
         "notes",
@@ -141,6 +189,7 @@ class Task:
     priority: Priority
     pet: Pet
     preferredTime: Time          # datetime.time replaces the bare "HH:MM" string
+    flexibility: Optional[Flexibility] = None  # resolved in __post_init__; None means "use the type-based default"
     recurrence: str = "none"     # "none" | "daily" | "weekly"
     dueDate: Date = dc_field(default_factory=lambda: datetime.today().date())
     completed: bool = False
@@ -155,6 +204,9 @@ class Task:
     def __hash__(self) -> int:
         return hash(self.taskId)
 
+    def __post_init__(self) -> None:
+        self.flexibility = resolve_flexibility(self.taskType, self.flexibility)
+
     def markComplete(self) -> None:
         """Mark this task as completed by setting completed to True."""
         self.completed = True
@@ -167,6 +219,9 @@ class Task:
                 f"Task field '{field_name}' is not editable. "
                 f"Allowed fields: {allowed}."
             )
+
+        if field_name == "flexibility":
+            value = resolve_flexibility(self.taskType, value)
 
         setattr(self, field_name, value)
 
@@ -184,6 +239,7 @@ class Task:
             "dueDate": self.dueDate.isoformat(),
             "completed": self.completed,
             "notes": self.notes,
+            "flexibility": self.flexibility.value,
         }
 
     @staticmethod
@@ -201,6 +257,7 @@ class Task:
             dueDate=Date.fromisoformat(data["dueDate"]),
             completed=data.get("completed", False),
             notes=data.get("notes", ""),
+            flexibility=data.get("flexibility"),
         )
 
     _RECURRENCE_DELTAS = {
@@ -224,6 +281,7 @@ class Task:
             recurrence=self.recurrence,
             dueDate=self.dueDate + delta,
             notes=self.notes,
+            flexibility=self.flexibility,
         )
 
     def getTaskSummary(self) -> str:
@@ -237,6 +295,7 @@ class Task:
         )
         if self.notes:
             summary += f" | Notes: {self.notes}"
+        summary += f" | Flexibility: {self.flexibility.value}"
         return summary
 
 

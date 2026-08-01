@@ -1,211 +1,175 @@
-# PawPal+ (Module 2 Project)
+# PawPal Sentinel
 
-You are building **PawPal+**, a Streamlit app that helps a pet owner plan care tasks for their pet.
+## 1. Original project: PawPal+
 
-## Scenario
+This project builds on **PawPal+**, a Streamlit app that helps a pet owner plan daily care tasks. PawPal+'s deterministic `Scheduler` (`pawpal_system.py`) packs each pet's tasks (walks, feeding, medication, play, grooming) into the owner's availability window by `priority` (high/medium/low) and preferred time, supports `recurrence` ("none"/"daily"/"weekly") so completed tasks automatically spawn their next occurrence, and detects same-pet and cross-pet scheduling conflicts. Owner/pet/task state persists as JSON (`Owner.save_to_json` / `Owner.load_from_json`), and the whole flow is driven through a Streamlit UI (`app.py`).
 
-A busy pet owner needs help staying consistent with pet care. They want an assistant that can:
+## 2. PawPal Sentinel summary
 
-- Track pet care tasks (walks, feeding, meds, enrichment, grooming, etc.)
-- Consider constraints (time available, priority, owner preferences)
-- Produce a daily plan and explain why it chose that plan
+PawPal+ produces a schedule, but nothing verifies whether an AI-suggested change to that schedule is actually safe. PawPal Sentinel adds an AI-reviewed layer on top of the existing scheduler that inspects a draft plan, proposes fixes for conflicts, and enforces hard safety rules before anything is written back — answering one central question:
 
-Your job is to design the system first (UML), then implement the logic in Python, then connect it to the Streamlit UI.
+> **Can an AI improve a pet-care schedule without making unsafe or invalid changes?**
 
-## What you will build
+## 3. Feature overview
 
-Your final app should:
+- **RAG retriever** (`retriever.py`) — keyword search over a local pet-care rules file (`data/care_rules.md`), builds its query only from structured schedule evidence (never free text), no AI call involved.
+- **AI plan critic** (`plan_critic.py`) — reviews a schedule snapshot plus deterministic conflict evidence and retrieved rules, and returns a strictly typed list of issues (or "no change needed"). Read-only — it cannot edit anything.
+- **Repair agent** (`repair_agent.py`) — proposes a minimal set of structured task-time changes to resolve the critic's issues, and can revise once using validator feedback.
+- **Deterministic validator** (`schedule_validator.py`) — the trust boundary. Ten hard-coded guardrail checks (schema, known task IDs, allowed actions, fixed/medication tasks unchanged, valid times, inside availability, no new conflicts, etc.) decide whether a proposal is ever shown to the owner.
+- **Human approval** (`sentinel_service.py`) — the owner explicitly approves or rejects a validated proposal; only approval can mutate the live schedule, and only the `preferredTime` field of `move` actions is ever changed.
+- **Evaluation harness** (`evaluate.py`) — runs the whole pipeline against a fixed set of scenarios (`data/evaluation_scenarios.json`) in fixture or live mode and scores it against expected outcomes.
 
-- Let a user enter basic owner + pet info
-- Let a user add/edit tasks (duration + priority at minimum)
-- Generate a daily schedule/plan based on constraints and priorities
-- Display the plan clearly (and ideally explain the reasoning)
-- Include tests for the most important scheduling behaviors
+## 4. Architecture
 
-## Getting started
+Mermaid source: [`diagrams/architecture.mmd`](diagrams/architecture.mmd) (no rendered PNG has been generated yet — the `.mmd` file is the source of truth).
 
-### Setup
+**Data flow:** the owner enters pets/tasks/availability in Streamlit, which the deterministic `Scheduler.generatePlan()` turns into a draft plan; that plan is snapshotted and checked for conflicts, which drive a retrieval query against `care_rules.md`. The AI Plan Critic reviews the snapshot, conflicts, and retrieved rules and reports issues; if there are real issues, the AI Repair Agent proposes task-time changes, which the deterministic Schedule Validator checks against ten guardrail rules — with at most one AI revision attempt if the first proposal fails. Only a validator-approved proposal reaches the owner for approval, and only an explicit approval mutates the live schedule (and only the `preferredTime` field of moved tasks). Every run and every owner decision is written to a structured JSONL log.
+
+## 5. Setup
 
 ```bash
+# Python 3.13
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# activate
+source .venv/bin/activate        # macOS/Linux
+.venv\Scripts\activate           # Windows
+
 pip install -r requirements.txt
-```
 
-### Suggested workflow
+# copy and fill in your own Gemini API key
+cp .env.example .env             # Windows: copy .env.example .env
 
-1. Read the scenario carefully and identify requirements and edge cases.
-2. Draft a UML diagram (classes, attributes, methods, relationships).
-3. Convert UML into Python class stubs (no logic yet).
-4. Implement scheduling logic in small increments.
-5. Add tests to verify key behaviors.
-6. Connect your logic to the Streamlit UI in `app.py`.
-7. Refine UML so it matches what you actually built.
+# run the app
+streamlit run app.py
 
-## 🖥️ Sample Output
+# run the evaluation harness (fixture mode is deterministic/reproducible, no API key needed)
+python evaluate.py --mode fixture
+python evaluate.py --mode live   # requires a real GEMINI_API_KEY
 
-Paste a sample of your app's CLI or Streamlit output here so a reader can see what a generated plan looks like:
-
---- All tasks sorted by time (added out of order) (7) ---
-  [HIGH] Walk Buddy (walk) | 30 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-03 (daily) | Status: pending
-  [MEDIUM] Bath Buddy (bath) | 25 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [MEDIUM] Groom Mittens (groom) | 20 min @ 9:30 AM | Pet: Mittens | Due: 2026-07-03 (weekly) | Status: pending
-  [MEDIUM] Feed Mittens (feed) | 15 min @ 12:00 PM | Pet: Mittens | Due: 2026-07-03 (daily) | Status: pending
-  [LOW] Buddy Lunchtime (play) | 20 min @ 12:05 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [HIGH] Evening Feed (feed) | 10 min @ 5:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [LOW] Play with Buddy (play) | 20 min @ 6:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-
---- Tasks sorted by priority first, then time (7) ---
-  [HIGH] Walk Buddy (walk) | 30 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-03 (daily) | Status: pending
-  [HIGH] Evening Feed (feed) | 10 min @ 5:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [MEDIUM] Bath Buddy (bath) | 25 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [MEDIUM] Groom Mittens (groom) | 20 min @ 9:30 AM | Pet: Mittens | Due: 2026-07-03 (weekly) | Status: pending
-  [MEDIUM] Feed Mittens (feed) | 15 min @ 12:00 PM | Pet: Mittens | Due: 2026-07-03 (daily) | Status: pending
-  [LOW] Buddy Lunchtime (play) | 20 min @ 12:05 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [LOW] Play with Buddy (play) | 20 min @ 6:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-
->> Checking for scheduling conflicts ...
-   WARNING [cross-pet] 'Feed Mittens' (Mittens, 12:00 PM–12:15 PM) overlaps with 'Buddy Lunchtime' (Buddy, 12:05 PM–12:25 PM)
-   WARNING [same-pet] 'Walk Buddy' (Buddy, 7:00 AM–7:30 AM) overlaps with 'Bath Buddy' (Buddy, 7:00 AM–7:25 AM)
-
->> Completing 'Walk Buddy' (daily) and 'Groom Mittens' (weekly) ...
-   Spawned: 'Walk Buddy' due 2026-07-04 (daily)
-   Spawned: 'Groom Mittens' due 2026-07-10 (weekly)
-
---- Completed tasks (2) ---
-  [HIGH] Walk Buddy (walk) | 30 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-03 (daily) | Status: done
-  [MEDIUM] Groom Mittens (groom) | 20 min @ 9:30 AM | Pet: Mittens | Due: 2026-07-03 (weekly) | Status: done
-
---- Pending tasks (includes next-day spawns) (7) ---
-  [LOW] Play with Buddy (play) | 20 min @ 6:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [MEDIUM] Feed Mittens (feed) | 15 min @ 12:00 PM | Pet: Mittens | Due: 2026-07-03 (daily) | Status: pending
-  [HIGH] Evening Feed (feed) | 10 min @ 5:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [MEDIUM] Bath Buddy (bath) | 25 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [LOW] Buddy Lunchtime (play) | 20 min @ 12:05 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [HIGH] Walk Buddy (walk) | 30 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-04 (daily) | Status: pending
-  [MEDIUM] Groom Mittens (groom) | 20 min @ 9:30 AM | Pet: Mittens | Due: 2026-07-10 (weekly) | Status: pending
-
---- Buddy's pending tasks (5) ---
-  [LOW] Play with Buddy (play) | 20 min @ 6:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [HIGH] Evening Feed (feed) | 10 min @ 5:00 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [MEDIUM] Bath Buddy (bath) | 25 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [LOW] Buddy Lunchtime (play) | 20 min @ 12:05 PM | Pet: Buddy | Due: 2026-07-03 | Status: pending
-  [HIGH] Walk Buddy (walk) | 30 min @ 7:00 AM | Pet: Buddy | Due: 2026-07-04 (daily) | Status: pending
-
---- Mittens' pending tasks (2) ---
-  [MEDIUM] Feed Mittens (feed) | 15 min @ 12:00 PM | Pet: Mittens | Due: 2026-07-03 (daily) | Status: pending
-  [MEDIUM] Groom Mittens (groom) | 20 min @ 9:30 AM | Pet: Mittens | Due: 2026-07-10 (weekly) | Status: pending
-
-Daily plan for Alice's pets — 5 task(s), 1 hour and 30 minutes of 12 hours used:
-
-Buddy (Golden Retriever):
-  7:00 AM -> Bath Buddy (25 min) [priority: medium]
-  12:05 PM -> Buddy Lunchtime (20 min) [priority: low]
-  5:00 PM -> Evening Feed (10 min) [priority: high]
-  6:00 PM -> Play with Buddy (20 min) [priority: low]
-
-Mittens (Cat):
-  12:00 PM -> Feed Mittens (15 min) [priority: medium]
-
-```
-
-## 🧪 Testing PawPal+
-
-```bash
-# Run the full test suite:
+# run the tests
 pytest
-
-# Run with coverage:
-pytest --cov
 ```
 
-The tests cover the main backend logic for PawPal+. They check task completion, adding tasks to the scheduler and pet, filtering by completion status and pet name, recurring daily and weekly tasks, plan generation, sorting by time and priority, conflict detection, task editing, pet methods, and owner availability calculations.
+Environment variables (see `.env.example`):
 
-Confidence Level: ⭐⭐⭐⭐
+- `GEMINI_API_KEY` — **required** for any live Gemini call (AI critic, repair agent, `evaluate.py --mode live`). Without it, `GeminiAIClient` raises `AIConfigError` and the app surfaces "AI review is disabled until GEMINI_API_KEY is configured."
+- `PAWPAL_MODEL_NAME` — **optional.** If unset or not a recognized Gemini model ID, the client falls back to the default model (`gemini-3.1-flash-lite`) and logs a warning.
 
-Sample test output:
+## 6. End-to-end examples
+
+### Example 1 — Valid flexible repair
+
 ```
-============================================================================ 56 passed in 0.06s =============================================================================
+Input:
+  Owner Priya, availability 06:30-18:30, pet Biscuit
+  med-p1  Morning Medication  08:00  fixed     (medication)
+  walk-p1 Morning Walk        08:00  flexible  (30 min)
+  -> med-p1 and walk-p1 overlap at 08:00
 
-## 📐 Smarter Scheduling
+Critic:    needs_revision — schedule_conflict on [med-p1, walk-p1]
+Repair:    move walk-p1 08:00 -> 09:00, keep med-p1 untouched
+Validator: attempt 1 passes all checks (fixed/medication unchanged, no new conflicts, inside availability)
+Result:    awaiting_owner_approval
+```
 
-> Fill in once you've implemented scheduling logic.
+### Example 2 — Unsafe fixed-task repair rejected
 
-| Feature | Method(s) | Notes |
-|---------|-----------|-------|
-| Task sorting | sortTasksByPriority(), sort_by_time(), generatePlan() | Tasks can be sorted by priority from high to low, and the final daily plan is sorted by preferred time so it appears in schedule order.  |
-| Filtering | filterTasks(), generatePlan(), _fits_window() | Tasks can be filtered by completion status and pet name. The scheduler also skips completed tasks, future tasks, tasks that exceed remaining time, and tasks outside the owner’s available window. |
-| Conflict handling | detectConflicts(), getConflictWarnings()| The scheduler checks whether task time windows overlap and can return conflict warnings for same-pet or cross-pet conflicts.  |
-| Recurring tasks | completeTask(), spawn_next() |  When a daily or weekly task is completed, the scheduler creates the next occurrence with the same task details and a new due date. |
+```
+Input:
+  Owner Aaliyah, availability 06:00-21:00, pet Nibbles
+  med-a1  Vitamin Dose   09:00  fixed     (medication, daily)
+  play-a1 Morning Play   09:00  flexible  (25 min)
+  -> med-a1 and play-a1 overlap at 09:00
 
-## Features 
-Owner and Pet Management
-* The user can create or update an owner profile with a name and available care window.
-* The app calculates the owner's available time in minutes and displays it in a readable format.
-* The user can add pets with name, species, breed, age, food type, medication, and energy level.
-* Existing pets can be edited or removed from the Streamlit UI.
-* Removing a pet also removes that pet's tasks from the scheduler.
+Critic:    needs_revision — fixed_task_conflict on [med-a1, play-a1]
+Repair (attempt 1): move med-a1 09:00 -> 09:15
+Validator: REJECTED (fixed_tasks_unchanged=false, medication_tasks_unchanged=false)
+Repair (attempt 2, revise): defer_for_review both med-a1 and play-a1 instead of moving medication
+Validator: passes (nothing moved) but yields no applicable schedule change
+Result:    human_review_required — original schedule untouched
+```
 
-Task Management
-* The user can add tasks with a title, type, duration, priority, assigned pet, preferred time, due date, and recurrence.
-* Tasks are stored in the scheduler and also registered under the assigned pet.
-* Each task has a unique taskId, which allows the app to edit or delete the correct task.
-* The user can mark tasks as done, edit task details, or delete tasks from the queued task list.
-* Completed tasks are excluded from future generated schedules and conflict checks.
+### Example 3 — No repair needed
 
-Sorting and Filtering
-* Scheduler.sort_by_time() sorts tasks from earliest to latest preferred time.
-* Scheduler.sortTasksByPriority() sorts tasks from high priority to low priority.
-* Scheduler.filterTasks() lets the UI filter tasks by completion status and pet name.
-* The Streamlit UI allows the user to sort queued tasks by time, priority, or insertion order.
-* The Streamlit UI allows the user to filter tasks by all/pending/completed status and by specific pet.
+```
+Input:
+  Owner Helena, availability 08:00-16:00, pet Finn
+  feed-h1  Breakfast Feeding  09:00  preferred (15 min)
+  groom-h1 Feather Check      11:00  flexible  (20 min)
+  -> no overlaps, nothing unscheduled
 
-Daily Schedule Generation
-* Scheduler.generatePlan() builds a daily plan from pending tasks that are due today or overdue.
-* The scheduler prioritizes high-priority tasks first when deciding what fits in the available time.
-* The final daily plan is displayed in chronological order using sort_by_time()
-* Tasks that do not fit because of time limits or the owner's availability window are placed in unscheduledTasks
-* Scheduler.explainPlan() creates a readable explanation grouped by pet.
+Critic:    no_change_needed — "No supported schedule issue was found."
+Result:    no_repair_needed — repair/validator cycle is never invoked
+```
 
-Recurring Tasks
-* Tasks can be non-recurring, daily, or weekly.
-* When a daily task is marked complete, completeTask() uses _spawn_next() to create the next occurrence for the following day.
-* When a weekly task is marked complete, the next occurrence is created one week later.
-* The new recurring task keeps the same title, task type, duration, priority, pet, preferred time, recurrence, and notes.
-* The scheduler prevents double-spawning by returning nothing if the same completed task is completed again.
+## 7. Guardrail example
 
-Conflict Detection
-* Scheduler.detectConflicts() returns tasks whose time windows overlap.
-* Scheduler.getConflictWarnings() returns readable warning messages for overlapping tasks.
-* Conflict warnings identify whether the conflict is a same-pet conflict or a cross-pet conflict.
-* Adjacent tasks that touch but do not overlap are allowed.
-* Completed tasks are ignored during conflict detection.
-* The Streamlit UI displays conflict warnings after the user generates a schedule.
+```
+Input:            fixed medication task (med-a1, 09:00) overlaps a flexible play task (play-a1, 09:00)
+AI proposal:       attempt 1 moves med-a1's time to 09:15
+Validator behavior: rejects the proposal — fixed_tasks_unchanged and medication_tasks_unchanged both
+                     evaluate to false; the validator error is fed back for one revision
+Final result:      revision defers both tasks instead of moving medication -> human_review_required;
+                    no live task time is ever changed
+```
 
-Data Persistence
-* `Owner.save_to_json(filepath="data.json")` writes the owner's name, care window, preferences, pets, and the scheduler's tasks to a JSON file.
-* `Owner.load_from_json(filepath="data.json")` rebuilds an `Owner` (with its pets and tasks correctly re-linked) from that file, or returns `None` if the file doesn't exist yet or can't be parsed.
-* Every mutation in the Streamlit UI — creating/updating the owner, adding/editing/removing a pet, and adding/editing/marking done/deleting a task — immediately calls `save_to_json()`, so `data.json` always reflects the current state, including deletions.
-* On startup, `app.py` calls `Owner.load_from_json()` once if no owner is in `st.session_state` yet, so pets and tasks survive restarting the app rather than only surviving within one running session.
-* Serialization uses a small custom `to_dict()`/`from_dict()` pair on `Pet` and `Task` rather than a library like marshmallow: `Priority` is converted via `.value`, `datetime.time`/`datetime.date` via `.isoformat()`, and each task stores its pet's `petId` (a new field on `Pet`, added the same way `taskId` was added to `Task`) instead of a nested pet object — this avoids serializing `Pet`/`Task`'s circular reference (`Pet.tasks` ↔ `Task.pet`) and avoids adding a new dependency for a data shape this small.
-* Files touched for this feature: `pawpal_system.py` (new `petId` field on `Pet`; `to_dict`/`from_dict` on `Pet` and `Task`; `save_to_json`/`load_from_json` on `Owner`), `app.py` (loads `data.json` on startup, saves after every mutation), `.gitignore` (`data.json` excluded, since it's a generated runtime file), and `test_pawpal.py` (round-trip persistence tests).
+## 8. RAG impact on output quality
 
-Professional UI 
-* The Streamlit UI (`app.py`) shows color-coded status via `st.success`/`st.warning`/`st.info`/`st.error` banners (green for done, orange for high-priority pending, red for conflicts) plus emoji priority badges (🔴 High, 🟠 Medium, 🟢 Low) from the `priority_badge()` helper).
+Without retrieval, the AI critic and repair agent receive the schedule
+snapshot and the general prompt constraints (e.g. "never move a fixed or
+medication task") but no task-specific PawPal care guidance beyond what is
+hard-coded into the system prompt. With retrieval enabled, a detected
+conflict drives `build_retrieval_query()` (`retriever.py:194`) to pull up to
+three matching sections out of `data/care_rules.md` via `retrieve_rules()`
+(`retriever.py:129`), which are then included in both the critic's and the
+repair agent's prompt context.
 
+**Before/after, using the documented trace (`ai_interactions.md`, Trace D):**
 
-## 📸 Demo Walkthrough
+A medication-conflict scenario retrieved the `Medication Tasks`,
+`Feeding Tasks`, and `General Scheduling` sections of `care_rules.md`. Those
+sections reinforce, in the pet-care domain's own language, that medication
+tasks are fixed and must never be rescheduled, and that flexible tasks should
+be moved to resolve an overlap instead. With that grounding in the prompt,
+the repair agent's first attempt (`move`, `keep`, `move` across the three
+conflicting tasks) passed the deterministic validator immediately — no
+revision cycle was needed.
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+Without the retrieved sections, the repair agent has only the general system
+prompt to go on when deciding *which* of several overlapping tasks is safe to
+move, which is where the baseline-vs-specialized-prompt comparison in
+[`model_card.md`](../model_card.md) (§4/§7) shows a materially higher rate of
+unsafe proposals (5/5 unsafe under the generic prompt vs. 0/5 under the
+specialized, retrieval-aware prompt). The retrieval layer supplies the
+domain-specific "why" — grounding the model in task-type-specific rules
+rather than leaving it to infer scheduling safety from the schedule data
+alone.
 
-1. In Owner Setup, the user enters their name and chooses an available care window, such as 7:00 AM to 7:00 PM. The app saves the owner and displays the total available time.
-2. In Add a Pet, the user adds one or more pets by entering details such as pet name, species, breed, age, energy level, food type, and medication.
-3. The pet list appears under Your pets, where the user can expand a pet card to edit or remove that pet.
-4. In Schedule a Task, the user creates care tasks for a selected pet. Each task includes a task title, task type, duration, priority, recurrence, preferred time, and due date.
-5. The queued task section displays all created tasks as cards. The user can sort tasks by time or priority, filter by status or pet, mark a task done, edit a task, or delete a task.
-6. When the user marks a daily or weekly recurring task as done, PawPal+ automatically creates the next occurrence with a new due date.
-7. The user clicks Generate Schedule to create the daily plan. The scheduler selects pending tasks that are due today, prioritizes important tasks, checks whether each task fits in the owner's available time window, and displays the final plan in time order.
-8. If a task cannot fit, it appears in the Not scheduled section.
-9. If two task time windows overlap, the app displays a conflict warning. The warning explains which tasks overlap and whether the conflict is for the same pet or different pets.
+In short: retrieval does not change *whether* the validator is the final
+authority (it always is), but it measurably reduces how often the repair
+agent needs a second attempt or produces a proposal the validator has to
+reject — see the full trace in [`ai_interactions.md`](../ai_interactions.md)
+and the metrics table in [`model_card.md`](../model_card.md).
 
-**Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
+## 9. Design decisions and tradeoffs
+
+- The existing PawPal+ scheduler stays fully deterministic — the AI never generates the draft plan, only reviews it.
+- The AI proposes changes; the deterministic `ScheduleValidator` decides. AI output is never trusted or applied on its own.
+- A validated proposal still requires explicit human approval before the live schedule is mutated.
+- The critic and repair agent are prompted and validated to never suggest diagnoses or medication dosages — medication tasks are structurally protected (`fixed_tasks_unchanged`/`medication_tasks_unchanged` checks).
+- Exactly one AI revision attempt is allowed per review (`MAX_REPAIR_ATTEMPTS = 2` in `sentinel_service.py`) — a second validator failure always escalates to human review rather than retrying indefinitely.
+- The evaluation harness runs in fixture mode by default so scores are reproducible without depending on live model variance.
+
+## 10. Testing summary
+
+542 out of 542 tests passed (`pytest -q`, 2.70s). The fixture evaluation harness (`reports/fixture_evaluation.json`) scored 145/150 checks across 12 scenarios — a 96.67% reliability rate — with all 12 workflow-status outcomes matching expectations, 22/22 validator checks passed, 11/11 critic and repair outputs structurally valid, 11/11 issue-detection calls correct, 6/6 task-selection calls correct, and 0 scenario errors. No known failing tests or evaluation records as of this run.
+
+## 11. Limitations
+
+- Model output can be inconsistent between runs; the deterministic validator exists specifically to catch this.
+- The care-rules knowledge base (`data/care_rules.md`) is a small, local, hand-written file — not a comprehensive veterinary reference.
+- Scheduling only supports same-day availability windows; overnight windows are rejected.
+- The system gives no medical advice, diagnoses, or dosage recommendations.
+- No task is ever automatically deleted by the AI pipeline.
+- Human review remains necessary — no proposal is ever applied without explicit owner approval.
