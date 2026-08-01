@@ -360,6 +360,219 @@ def defer_for_review_repair_payload() -> dict[str, object]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Real pawpal_system.py object-graph fixtures (Owner/Pet/Task/Scheduler), as
+# distinct from the ScheduleSnapshot dataclasses above. Several test files
+# (test_pawpal.py, test_agent_workflow.py, test_sentinel_service.py) each
+# hand-roll their own make_pet/make_task/make_owner helpers and, in the last
+# two, an identical QueueAIClient class; these fixtures give future tests a
+# shared alternative. test_validator.py's local helpers are intentionally
+# left alone (its own header documents that its fixtures are meant to vary
+# test-class by test-class, not share one profile).
+#
+# Species are deliberately varied (dog/cat/bird/rabbit/guinea pig) rather
+# than only dog and cat, matching the range already used elsewhere in the
+# suite (e.g. test_ui_workflow.py, test_validator.py) and in
+# data/evaluation_scenarios.json.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def make_pet():
+    def _make_pet(
+        name: str,
+        species: str = "Dog",
+        breed: str = "",
+        age: int = 3,
+        foodType: str = "Kibble",
+        medication: str = "none",
+        energyLevel: int = 5,
+        careNeeds: list[str] | None = None,
+    ) -> Pet:
+        return Pet(
+            name=name,
+            species=species,
+            breed=breed,
+            age=age,
+            foodType=foodType,
+            medication=medication,
+            energyLevel=energyLevel,
+            careNeeds=list(careNeeds) if careNeeds else [],
+        )
+
+    return _make_pet
+
+
+@pytest.fixture
+def dog_pet(make_pet) -> Pet:
+    return make_pet("Mochi", species="Dog", breed="Shiba Inu", age=3, energyLevel=8)
+
+
+@pytest.fixture
+def cat_pet(make_pet) -> Pet:
+    return make_pet("Whiskers", species="Cat", breed="Tabby", age=4, energyLevel=4)
+
+
+@pytest.fixture
+def bird_pet(make_pet) -> Pet:
+    return make_pet("Finn", species="Bird", breed="African Grey", age=6, energyLevel=6)
+
+
+@pytest.fixture
+def rabbit_pet(make_pet) -> Pet:
+    return make_pet("Clover", species="Rabbit", breed="Holland Lop", age=2, energyLevel=5)
+
+
+@pytest.fixture
+def guinea_pig_pet(make_pet) -> Pet:
+    return make_pet(
+        "Nibbles", species="Guinea Pig", breed="Abyssinian", age=1,
+        medication="vitamin C", energyLevel=4,
+    )
+
+
+@pytest.fixture
+def make_owner():
+    def _make_owner(
+        name: str = "Jordan",
+        start: time = time(7, 0),
+        end: time = time(19, 0),
+        preferences: dict[str, str] | None = None,
+    ) -> Owner:
+        return Owner(
+            name=name,
+            startTime=start,
+            endTime=end,
+            preferences=dict(preferences) if preferences else {},
+        )
+
+    return _make_owner
+
+
+@pytest.fixture
+def make_task():
+    def _make_task(
+        pet: Pet,
+        name: str,
+        task_type: str,
+        preferred_time: time,
+        *,
+        duration: int = 20,
+        priority: Priority = Priority.MEDIUM,
+        flexibility: Flexibility | str | None = None,
+        recurrence: str = "none",
+        notes: str = "",
+    ) -> Task:
+        return Task(
+            taskName=name,
+            taskType=task_type,
+            durationMinutes=duration,
+            priority=priority,
+            pet=pet,
+            preferredTime=preferred_time,
+            flexibility=flexibility,
+            recurrence=recurrence,
+            notes=notes,
+        )
+
+    return _make_task
+
+
+@pytest.fixture
+def medication_task(make_task, dog_pet) -> Task:
+    return make_task(
+        dog_pet, "Morning Medication", "medication", time(8, 0),
+        duration=10, priority=Priority.HIGH, recurrence="daily",
+    )
+
+
+@pytest.fixture
+def fixed_appointment_task(make_task, cat_pet) -> Task:
+    return make_task(
+        cat_pet, "Annual Checkup", "vet appointment", time(10, 0),
+        duration=30, priority=Priority.HIGH,
+    )
+
+
+@pytest.fixture
+def preferred_feeding_task(make_task, bird_pet) -> Task:
+    return make_task(
+        bird_pet, "Breakfast Feeding", "feeding", time(9, 0),
+        duration=15, priority=Priority.MEDIUM, recurrence="daily",
+    )
+
+
+@pytest.fixture
+def flexible_walk_task(make_task, rabbit_pet) -> Task:
+    return make_task(
+        rabbit_pet, "Morning Playtime", "play", time(8, 0),
+        duration=20, priority=Priority.MEDIUM,
+    )
+
+
+@pytest.fixture
+def owner_with_conflicting_schedule(make_owner, make_task, dog_pet, cat_pet) -> Owner:
+    owner = make_owner(name="Priya")
+    owner.addPet(dog_pet)
+    owner.addPet(cat_pet)
+    owner.scheduler.addTask(
+        make_task(dog_pet, "Morning Medication", "medication", time(8, 0), priority=Priority.HIGH)
+    )
+    owner.scheduler.addTask(
+        make_task(cat_pet, "Morning Walk", "walk", time(8, 0), duration=30)
+    )
+    return owner
+
+
+@pytest.fixture
+def owner_with_conflict_free_schedule(
+    make_owner, make_task, bird_pet, rabbit_pet, guinea_pig_pet
+) -> Owner:
+    owner = make_owner(name="Helena")
+    owner.addPet(bird_pet)
+    owner.addPet(rabbit_pet)
+    owner.addPet(guinea_pig_pet)
+    owner.scheduler.addTask(
+        make_task(bird_pet, "Breakfast Feeding", "feeding", time(9, 0), recurrence="daily")
+    )
+    owner.scheduler.addTask(
+        make_task(rabbit_pet, "Feather Check", "grooming", time(11, 0), recurrence="weekly")
+    )
+    owner.scheduler.addTask(
+        make_task(guinea_pig_pet, "Vitamin Dose", "medication", time(13, 0), priority=Priority.HIGH)
+    )
+    return owner
+
+
+class QueueAIClient:
+    """Fake AIClient that replays a scripted queue of critic/repair responses.
+
+    Consolidates the identical class independently defined in
+    test_agent_workflow.py and test_sentinel_service.py.
+    """
+
+    def __init__(self, responses: list[object]) -> None:
+        self.responses = list(responses)
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def generate_json(self, system_prompt: str, user_payload: dict[str, object]) -> object:
+        self.calls.append((system_prompt, user_payload))
+        if not self.responses:
+            raise AssertionError("Unexpected extra AI call")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+@pytest.fixture
+def queue_ai_client():
+    def _queue_ai_client(responses: list[object]) -> QueueAIClient:
+        return QueueAIClient(responses)
+
+    return _queue_ai_client
+
+
 @pytest.fixture
 def multi_change_repair_payload() -> dict[str, object]:
     return {
