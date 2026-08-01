@@ -51,7 +51,10 @@ python evaluate.py --mode live   # requires a real GEMINI_API_KEY
 pytest
 ```
 
-`.env` requires `GEMINI_API_KEY`, `PAWPAL_AI_ENABLED=true`, and `PAWPAL_MODEL_NAME` (see `.env.example`).
+Environment variables (see `.env.example`):
+
+- `GEMINI_API_KEY` — **required** for any live Gemini call (AI critic, repair agent, `evaluate.py --mode live`). Without it, `GeminiAIClient` raises `AIConfigError` and the app surfaces "AI review is disabled until GEMINI_API_KEY is configured."
+- `PAWPAL_MODEL_NAME` — **optional.** If unset or not a recognized Gemini model ID, the client falls back to the default model (`gemini-3.1-flash-lite`) and logs a warning.
 
 ## 6. End-to-end examples
 
@@ -111,7 +114,45 @@ Final result:      revision defers both tasks instead of moving medication -> hu
                     no live task time is ever changed
 ```
 
-## 8. Design decisions and tradeoffs
+## 8. RAG impact on output quality
+
+Without retrieval, the AI critic and repair agent receive the schedule
+snapshot and the general prompt constraints (e.g. "never move a fixed or
+medication task") but no task-specific PawPal care guidance beyond what is
+hard-coded into the system prompt. With retrieval enabled, a detected
+conflict drives `build_retrieval_query()` (`retriever.py:194`) to pull up to
+three matching sections out of `data/care_rules.md` via `retrieve_rules()`
+(`retriever.py:129`), which are then included in both the critic's and the
+repair agent's prompt context.
+
+**Before/after, using the documented trace (`ai_interactions.md`, Trace D):**
+
+A medication-conflict scenario retrieved the `Medication Tasks`,
+`Feeding Tasks`, and `General Scheduling` sections of `care_rules.md`. Those
+sections reinforce, in the pet-care domain's own language, that medication
+tasks are fixed and must never be rescheduled, and that flexible tasks should
+be moved to resolve an overlap instead. With that grounding in the prompt,
+the repair agent's first attempt (`move`, `keep`, `move` across the three
+conflicting tasks) passed the deterministic validator immediately — no
+revision cycle was needed.
+
+Without the retrieved sections, the repair agent has only the general system
+prompt to go on when deciding *which* of several overlapping tasks is safe to
+move, which is where the baseline-vs-specialized-prompt comparison in
+[`model_card.md`](../model_card.md) (§4/§7) shows a materially higher rate of
+unsafe proposals (5/5 unsafe under the generic prompt vs. 0/5 under the
+specialized, retrieval-aware prompt). The retrieval layer supplies the
+domain-specific "why" — grounding the model in task-type-specific rules
+rather than leaving it to infer scheduling safety from the schedule data
+alone.
+
+In short: retrieval does not change *whether* the validator is the final
+authority (it always is), but it measurably reduces how often the repair
+agent needs a second attempt or produces a proposal the validator has to
+reject — see the full trace in [`ai_interactions.md`](../ai_interactions.md)
+and the metrics table in [`model_card.md`](../model_card.md).
+
+## 9. Design decisions and tradeoffs
 
 - The existing PawPal+ scheduler stays fully deterministic — the AI never generates the draft plan, only reviews it.
 - The AI proposes changes; the deterministic `ScheduleValidator` decides. AI output is never trusted or applied on its own.
@@ -120,11 +161,11 @@ Final result:      revision defers both tasks instead of moving medication -> hu
 - Exactly one AI revision attempt is allowed per review (`MAX_REPAIR_ATTEMPTS = 2` in `sentinel_service.py`) — a second validator failure always escalates to human review rather than retrying indefinitely.
 - The evaluation harness runs in fixture mode by default so scores are reproducible without depending on live model variance.
 
-## 9. Testing summary
+## 10. Testing summary
 
 542 out of 542 tests passed (`pytest -q`, 2.70s). The fixture evaluation harness (`reports/fixture_evaluation.json`) scored 145/150 checks across 12 scenarios — a 96.67% reliability rate — with all 12 workflow-status outcomes matching expectations, 22/22 validator checks passed, 11/11 critic and repair outputs structurally valid, 11/11 issue-detection calls correct, 6/6 task-selection calls correct, and 0 scenario errors. No known failing tests or evaluation records as of this run.
 
-## 10. Limitations
+## 11. Limitations
 
 - Model output can be inconsistent between runs; the deterministic validator exists specifically to catch this.
 - The care-rules knowledge base (`data/care_rules.md`) is a small, local, hand-written file — not a comprehensive veterinary reference.
