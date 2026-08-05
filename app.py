@@ -540,62 +540,7 @@ def render_validated_changes(run: object) -> bool:
     return True
 
 
-# ── Phase 6.6: Render deterministic validator evidence ───────────────────────
-_VALIDATOR_CHECK_LABELS: tuple[tuple[str, str], ...] = (
-    ("schema_valid", "Proposal schema is valid"),
-    ("task_ids_known", "Task IDs belong to the reviewed schedule"),
-    ("actions_allowed", "Only allowlisted actions are used"),
-    ("fixed_tasks_unchanged", "Fixed tasks remain unchanged"),
-    ("medication_tasks_unchanged", "Medication and protected tasks remain unchanged"),
-    ("times_valid", "Proposed times use valid HH:MM format"),
-    ("inside_availability", "Proposed times stay inside owner availability"),
-    ("no_new_conflicts", "The proposal creates no new conflicts"),
-    ("protected_fields_unchanged", "Protected task fields remain unchanged"),
-    ("proposal_not_stale", "Validator checked the reviewed proposal version"),
-    ("reviewed_conflicts_resolved", "The reviewed conflicts are resolved"),
-)
-
-
-def _guardrail_summary(raw_checks: object) -> tuple[int, int, list[str]]:
-    """Reduce a validator checks dict to (passed_count, total_count, failing_labels).
-
-    Mirrors the same check ordering as the detailed checklist rendered in
-    render_validator_evidence's expander (named checks first, then any
-    unknown/future keys) so the short summary and the full checklist always
-    agree on counts. A check value that isn't a strict ``bool`` counts as
-    failing rather than truthy, matching the detailed checklist's behavior.
-    """
-    if not isinstance(raw_checks, dict):
-        return 0, 0, []
-
-    passed = 0
-    total = 0
-    failing: list[str] = []
-    displayed: set[str] = set()
-
-    for check_name, label in _VALIDATOR_CHECK_LABELS:
-        if check_name not in raw_checks:
-            continue
-        displayed.add(check_name)
-        total += 1
-        if raw_checks.get(check_name) is True:
-            passed += 1
-        else:
-            failing.append(label)
-
-    for check_name in sorted(key for key in raw_checks if isinstance(key, str)):
-        if check_name in displayed:
-            continue
-        total += 1
-        label = check_name.replace("_", " ").strip().capitalize()
-        if raw_checks.get(check_name) is True:
-            passed += 1
-        else:
-            failing.append(label)
-
-    return passed, total, failing
-
-
+# ── Phase 6.6: Deterministic validator evidence (eligibility only, no UI) ────
 def _current_schedule_version_matches(owner: Owner, run: object) -> tuple[bool, str]:
     """Compare the live schedule fingerprint with the exact reviewed version."""
     snapshot = getattr(run, "snapshot", None)
@@ -641,109 +586,30 @@ def _has_validated_move(run: object) -> bool:
     return any(_enum_text(getattr(change, "action", None)) == "move" for change in changes)
 
 
-def render_validator_evidence(owner: Owner, run: object) -> bool:
-    """Render Phase 6.6 and return whether Phase 6.7 may enable approval.
+def _compute_approval_eligibility(owner: Owner, run: object) -> bool:
+    """Return whether Phase 6.7 may enable approval, without rendering anything.
 
     The returned value is display-level eligibility only. Phase 6.7 must still
     rebuild the snapshot, revalidate, and call the service approval boundary.
     """
-    st.markdown("### Guardrail Results")
-
     validation = getattr(run, "final_validation", None)
     if validation is None:
-        st.info("No final deterministic validation result is available for this run.")
         return False
 
     valid_flag = getattr(validation, "valid", False) is True
     raw_checks = getattr(validation, "checks", {})
     if not isinstance(raw_checks, dict):
-        st.error("Validator checks were unavailable in the expected format.")
-        raw_checks = {}
         valid_flag = False
 
-    version_matches, version_message = _current_schedule_version_matches(owner, run)
-
-    with st.container(border=True):
-        if valid_flag:
-            st.success("The final proposal passed deterministic validation.")
-        else:
-            st.error("The final proposal did not pass deterministic validation.")
-
-        passed_count, total_count, failing_labels = _guardrail_summary(raw_checks)
-        if failing_labels:
-            st.error(f"{passed_count} of {total_count} guardrail checks passed:")
-            for label in failing_labels:
-                st.error(f"❌ {label}")
-        else:
-            st.success(f"All {total_count} guardrail checks passed.")
-
-        with st.expander("Show full guardrail checklist"):
-            displayed: set[str] = set()
-            for check_name, label in _VALIDATOR_CHECK_LABELS:
-                if check_name not in raw_checks:
-                    continue
-                displayed.add(check_name)
-                passed = raw_checks.get(check_name) is True
-                if passed:
-                    st.success(f"✅ {label}")
-                else:
-                    st.error(f"❌ {label}")
-
-            # Preserve visibility of any future validator checks without trusting
-            # arbitrary values as passed booleans.
-            for check_name in sorted(key for key in raw_checks if isinstance(key, str)):
-                if check_name in displayed:
-                    continue
-                label = check_name.replace("_", " ").strip().capitalize()
-                if raw_checks.get(check_name) is True:
-                    st.success(f"✅ {label}")
-                else:
-                    st.error(f"❌ {label}")
-
-        if version_matches:
-            st.success(f"✅ {version_message}")
-        else:
-            st.error(f"❌ {version_message}")
-
-        raw_errors = getattr(validation, "errors", ()) or ()
-        if isinstance(raw_errors, (tuple, list)) and raw_errors:
-            st.markdown("**Validator errors**")
-            displayed_errors = 0
-            for error in raw_errors[:30]:
-                message = _bounded_display_text(error, max_chars=500)
-                if message:
-                    st.warning(f"- {message}")
-                    displayed_errors += 1
-            if len(raw_errors) > 30:
-                st.caption(
-                    f"{len(raw_errors) - 30} additional validator error(s) were hidden "
-                    "to keep the interface bounded."
-                )
-            if displayed_errors == 0:
-                st.warning("The validator reported errors that could not be displayed safely.")
-        elif not isinstance(raw_errors, (tuple, list)):
-            st.error("Validator errors were unavailable in the expected format.")
-
+    version_matches, _ = _current_schedule_version_matches(owner, run)
     status = _enum_text(getattr(run, "status", None))
-    approval_ready = (
+
+    return (
         valid_flag
         and version_matches
         and status == WorkflowStatus.AWAITING_OWNER_APPROVAL.value
         and _has_validated_move(run)
     )
-
-    if approval_ready:
-        st.success(
-            "Approval eligibility: passed. Phase 6.7 must still perform final "
-            "revalidation before applying any time change."
-        )
-    else:
-        st.warning(
-            "Approval eligibility: blocked. Suggested changes must not be applied "
-            "unless every guardrail passes and the schedule version still matches."
-        )
-
-    return approval_ready
 
 
 
@@ -1032,9 +898,7 @@ def render_sentinel_state_summary(owner: Owner) -> None:
 
     if status == WorkflowStatus.HUMAN_REVIEW_REQUIRED.value:
         validation = getattr(run, "final_validation", None)
-        if validation is not None and getattr(validation, "valid", False) is not True:
-            render_validator_evidence(owner, run)
-        else:
+        if validation is None or getattr(validation, "valid", False) is True:
             st.warning(
                 "Sentinel could not produce a movable repair that can be safely "
                 "approved. Keep the current schedule and review the conflict manually."
@@ -1049,7 +913,7 @@ def render_sentinel_state_summary(owner: Owner) -> None:
 
     has_displayable_changes = render_validated_changes(run)
     approval_ready = (
-        render_validator_evidence(owner, run)
+        _compute_approval_eligibility(owner, run)
         if getattr(run, "final_validation", None) is not None
         else False
     )
@@ -1101,7 +965,6 @@ def render_sentinel_state_summary(owner: Owner) -> None:
                 )
 
         if success:
-            _set_sentinel_notice("success", approval_message)
             st.rerun()
         elif approval_status == ApprovalStatus.STALE_PROPOSAL.value:
             _set_sentinel_notice("warning", approval_message)
