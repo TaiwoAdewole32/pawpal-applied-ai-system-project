@@ -1,4 +1,5 @@
 import datetime
+import os
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -137,9 +138,15 @@ SENTINEL_NOTICE_KEY = "sentinel_notice"
 SENTINEL_IDLE_STATUS = "idle"
 MAX_SENTINEL_HISTORY = 20
 
+@st.cache_resource
+def _get_ai_client() -> GeminiAIClient:
+    """Build the Gemini SDK client once per app process, not once per session."""
+    return GeminiAIClient()
+
+
 if "ai_client" not in st.session_state:
     try:
-        st.session_state.ai_client = GeminiAIClient()
+        st.session_state.ai_client = _get_ai_client()
         st.session_state.ai_status = "ready"
         st.session_state.ai_config_warning = getattr(
             st.session_state.ai_client,
@@ -1224,8 +1231,19 @@ def render_task_card(t: Task, owner: "Owner", key_prefix: str) -> None:
                 st.rerun()
 
 
+@st.cache_data
+def _load_owner_cached(filepath: str, _mtime: float) -> Owner | None:
+    """Cache the parsed Owner per file-modified-time so unrelated reruns and
+    new sessions skip re-reading and re-parsing an unchanged data.json."""
+    return Owner.load_from_json(filepath)
+
+
 if "owner" not in st.session_state:
-    loaded_owner = Owner.load_from_json(DATA_FILE)
+    try:
+        data_mtime = os.path.getmtime(DATA_FILE)
+    except OSError:
+        data_mtime = 0.0
+    loaded_owner = _load_owner_cached(DATA_FILE, data_mtime)
     if isinstance(loaded_owner, Owner):
         st.session_state.owner = loaded_owner
 
